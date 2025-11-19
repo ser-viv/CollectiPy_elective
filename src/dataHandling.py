@@ -69,6 +69,7 @@ class DataHandling():
         self._last_snapshot_tick = None
         self._graph_step_dirs = {}
         self._graphs_root = None
+        self.hierarchy_enabled = bool(getattr(config_elem, "arena", {}).get("hierarchy"))
 
     def _normalize_specs(self, value):
         """Return a normalized set of model spec tokens."""
@@ -234,6 +235,8 @@ class SpaceDataHandling(DataHandling):
                         file_handle = open(file_path, "wb")
                         pickler = pickle.Pickler(file_handle, protocol=pickle.HIGHEST_PROTOCOL)
                         header = ["tick", "x", "y", "z"]
+                        if self.hierarchy_enabled:
+                            header.append("hierarchy_node")
                         pickler.dump({"type": "header", "value": header})
                         self.agents_files[(key, idx)] = {"handle": file_handle, "pickler": pickler}
                     if self.spin_dump_enabled:
@@ -274,6 +277,8 @@ class SpaceDataHandling(DataHandling):
                         continue
                     com = entity.center_of_mass()
                     row = [tick, com.x, com.y, com.z]
+                    if self.hierarchy_enabled:
+                        row.append(self._resolve_hierarchy_node(entity))
                     entry["pickler"].dump({"type": "row", "value": row})
         if self.spin_dump_enabled and self.agent_spin_files:
             for (key, idx), spin_entry in self.agent_spin_files.items():
@@ -313,6 +318,16 @@ class SpaceDataHandling(DataHandling):
             return None
         value = spin_group[idx][0]
         return value
+
+    def _resolve_hierarchy_node(self, entity):
+        """Return the hierarchy node identifier for the provided entity, if any."""
+        metadata = getattr(entity, "metadata", None)
+        if not isinstance(metadata, dict):
+            return None
+        node = metadata.get("hierarchy_node")
+        if node is None:
+            return None
+        return str(node)
 
     def _write_graph_snapshot(self, shapes, tick: int):
         """Persist per-step adjacency graphs (messages/detection)."""
