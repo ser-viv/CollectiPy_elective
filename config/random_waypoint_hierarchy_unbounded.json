@@ -1,0 +1,76 @@
+{
+    "plugins": [],
+    "environment": {
+        "collisions": true,
+        "time_limit": 120,
+        "num_runs": 1,
+        "results": {
+            "group_specs": ["graphs"],
+            "snapshots_per_second": 1
+        },
+        "gui": {
+            "_id": "2D",
+            "on_click": "show_spins"
+        },
+        "arenas": {
+            "arena_0": {
+                "_id": "rectangle",
+                "width": 2.0,
+                "depth": 1.2,
+                "height": 0.2,
+                "random_seed": 7,
+                "color": "gray",
+                "hierarchy": {
+                    "depth": 2,
+                    "branches": 4
+                }
+            }
+        },
+        "objects": {
+            "static_0": {
+                "_id": "idle",
+                "shape": "circle",
+                "color": "black",
+                "height": 0.05,
+                "diameter": 0.06,
+                "number": [
+                    3
+                ],
+                "strength": [
+                    5.0
+                ],
+                "uncertainty": [
+                    0.0
+                ]
+            }
+        },
+        "agents": {
+            "movable_0": {
+                "number": [
+                    12
+                ],
+                "shape": "cylinder",
+                "height": 0.03,
+                "diameter": 0.05,
+                "color": "blue",
+                "linear_velocity": 0.08,
+                "angular_velocity": 90,
+                "detection": {
+                    "type": "GPS",
+                    "range": "inf",
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "random_way_point",
+                "logic_behavior": "hierarchy_confinement",
+                "hierarchy_node": "0",
+                "messages": {
+                    "tx_per_second": 2,
+                    "rx_per_second": 4,
+                    "comm_range": 0.2,
+                    "type": "broadcast",
+                    "kind": "anonymous"
+                }
+            }
+        }
+    }
+}

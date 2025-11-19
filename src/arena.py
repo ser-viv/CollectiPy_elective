@@ -1,0 +1,683 @@
+# ------------------------------------------------------------------------------
+#  CollectiPy
+#  Copyright (c) 2025 Fabio Oddi
+#
+#  This file is part of CollectyPy, released under the BSD 3-Clause License.
+#  You may use, modify, and redistribute this file according to the terms of the
+#  license. Attribution is required if this code is used in other works.
+# ------------------------------------------------------------------------------
+
+import logging, time, math, random
+from typing import Optional
+import multiprocessing as mp
+from config import Config
+from random import Random
+from bodies.shapes3D import Shape3DFactory
+from entity import EntityFactory
+from geometry_utils.vector3D import Vector3D
+from dataHandling import DataHandlingFactory
+from arena_hierarchy import ArenaHierarchy, Bounds2D
+
+class ArenaFactory():
+
+    """Arena factory."""
+    @staticmethod
+    def create_arena(config_elem:Config):
+        """Create arena."""
+        if config_elem.arena.get("_id") in ("abstract", "none", None):
+            return AbstractArena(config_elem)
+        elif config_elem.arena.get("_id") == "circle":
+            return CircularArena(config_elem)
+        elif config_elem.arena.get("_id") == "rectangle":
+            return RectangularArena(config_elem)
+        elif config_elem.arena.get("_id") == "square":
+            return SquareArena(config_elem)
+        elif config_elem.arena.get("_id") == "sphere":
+            return SolidSphereArena(config_elem)
+        else:
+            raise ValueError(f"Invalid shape type: {config_elem.arena['_id']} valid types are: none, abstract, circle, rectangle, square")
+
+class Arena():
+    
+    """Arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        self.random_generator = Random()
+        self._seed_random = random.SystemRandom()
+        self.ticks_per_second = int(config_elem.environment.get("ticks_per_second", 1))
+        configured_seed = config_elem.arena.get("random_seed")
+        if configured_seed is None:
+            configured_seed = 0
+        self._configured_seed = int(configured_seed)
+        self.random_seed = self._configured_seed
+        self._id = "none" if config_elem.arena.get("_id") == "abstract" else config_elem.arena.get("_id","none") 
+        self.objects = {object_type: (config_elem.environment.get("objects",{}).get(object_type),[]) for object_type in config_elem.environment.get("objects",{}).keys()}
+        self.agents_shapes = {}
+        self.agents_spins = {}
+        self.agents_metadata = {}
+        self.data_handling = None
+        if len(config_elem.results) > 0 and not len(config_elem.gui) > 0 : self.data_handling = DataHandlingFactory.create_data_handling(config_elem)
+        self._hierarchy = None
+        self._hierarchy_enabled = "hierarchy" in config_elem.arena
+        self._hierarchy_config = config_elem.arena.get("hierarchy") if self._hierarchy_enabled else None
+        gui_cfg = config_elem.gui if hasattr(config_elem, "gui") else {}
+        throttle_cfg = gui_cfg.get("throttle", {})
+        if isinstance(throttle_cfg, (int, float)):
+            throttle_cfg = {"max_backlog": throttle_cfg}
+        raw_threshold = throttle_cfg.get("max_backlog", gui_cfg.get("max_backlog", 6))
+        try:
+            threshold = int(raw_threshold)
+        except (TypeError, ValueError):
+            threshold = 6
+        self._gui_backpressure_threshold = max(0, threshold)
+        raw_interval = throttle_cfg.get("poll_interval_ms", gui_cfg.get("poll_interval_ms", 8))
+        try:
+            interval_ms = float(raw_interval)
+        except (TypeError, ValueError):
+            interval_ms = 8.0
+        enabled_flag = throttle_cfg.get("enabled")
+        if enabled_flag is None:
+            enabled_flag = gui_cfg.get("adaptive_throttle", True)
+        self._gui_backpressure_enabled = bool(enabled_flag) if enabled_flag is not None else True
+        self._gui_backpressure_interval = max(0.001, interval_ms / 1000.0)
+        self._gui_backpressure_active = False
+
+    def get_id(self):
+        """Return the id."""
+        return self._id
+    
+    def get_seed(self):
+        """Return the seed."""
+        return self.random_seed
+    
+    def get_random_generator(self):
+        """Return the random generator."""
+        return self.random_generator
+
+    def increment_seed(self):
+        """Increment seed."""
+        self.random_seed += 1
+        
+    def reset_seed(self):
+        """Reset the seed to a deterministic starting point."""
+        base_seed = self._configured_seed if self._configured_seed is not None else 0
+        if base_seed < 0:
+            base_seed = 0
+        self.random_seed = base_seed
+        
+    def randomize_seed(self):
+        """Assign a random seed (used when GUI reset is requested)."""
+        self.random_seed = self._seed_random.randrange(0, 2**32)
+        
+    def set_random_seed(self):
+        """Set the random seed."""
+        if self.random_seed > -1:
+            self.random_generator.seed(self.random_seed)
+        else:
+            self.random_seed = self._seed_random.randrange(0, 2**32)
+            self.random_generator.seed(self.random_seed)
+
+    def initialize(self):
+        """Initialize the component state."""
+        self.reset()
+        for key,(config,entities) in self.objects.items():
+            for n in range(config["number"]):
+                entities.append(EntityFactory.create_entity(entity_type="object_"+key,config_elem=config,_id=n))
+                
+    def run(self,num_runs,time_limit, arena_queue:mp.Queue, agents_queue:mp.Queue, gui_in_queue:mp.Queue, dec_arena_in:mp.Queue, gui_control_queue:mp.Queue, render:bool=False):
+        """Run the simulation routine."""
+        pass
+
+    def reset(self):
+        """Reset the component state."""
+        self.set_random_seed()
+
+    def close(self):
+        """Close the component resources."""
+        for (config,entities) in self.objects.values():
+            for n in range(len(entities)):
+                entities[n].close()
+        if self.data_handling is not None: self.data_handling.close(self.agents_shapes)
+
+    def get_wrap_config(self):
+        """Optional metadata describing wrap-around projection (default: None)."""
+        return None
+
+    def get_hierarchy(self):
+        """Return the hierarchy."""
+        return self._hierarchy
+
+    def _create_hierarchy(self, bounds: Optional[Bounds2D]):
+        """Create hierarchy."""
+        if not self._hierarchy_enabled or self._hierarchy_config is None:
+            return None
+        cfg = self._hierarchy_config or {}
+        depth = int(cfg.get("depth", 0))
+        branches = int(cfg.get("branches", 1))
+        try:
+            return ArenaHierarchy(bounds, depth=depth, branches=branches)
+        except ValueError as exc:
+            raise ValueError(f"Invalid hierarchy configuration: {exc}") from exc
+
+
+class AbstractArena(Arena):
+    
+    """Abstract arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        super().__init__(config_elem)
+        logging.info("Abstract arena created successfully")
+        self._hierarchy = self._create_hierarchy(None)
+    
+    def get_shape(self):
+        """Return the shape."""
+        pass
+    
+    def close(self):
+        """Close the component resources."""
+        super().close()
+
+class SolidArena(Arena):
+    
+    """Solid arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        super().__init__(config_elem)
+        self.shape = Shape3DFactory.create_shape("arena",self._id, {key:val for key,val in config_elem.arena.items()})
+        self._grid_origin = None
+        self._grid_cell_size = None
+        self._update_hierarchy_from_shape()
+
+    def get_shape(self):
+        """Return the shape."""
+        return self.shape
+    
+    def initialize(self):
+        """Initialize the component state."""
+        super().initialize()
+        min_v = self.shape.min_vert()
+        max_v = self.shape.max_vert()
+        rng = self.random_generator
+        self._grid_origin = Vector3D(min_v.x, min_v.y, 0)
+        radii_map, max_radius = self._compute_entity_radii()
+        self._grid_cell_size = max(max_radius * 2.0, 0.05)
+        occupancy = {}
+        for (config, entities) in self.objects.values():
+            n_entities = len(entities)
+            for entity in entities:
+                entity.set_position(Vector3D(999, 0, 0), False)
+            for n in range(n_entities):
+                entity = entities[n]
+                if not entity.get_orientation_from_dict():
+                    rand_angle = Random.uniform(rng, 0.0, 360.0)
+                    entity.set_start_orientation(Vector3D(0, 0, rand_angle))
+                position = entity.get_start_position()
+                if not entity.get_position_from_dict():
+                    placed = self._place_entity_random(
+                        entity,
+                        radii_map[id(entity)],
+                        occupancy,
+                        rng,
+                        min_v,
+                        max_v
+                    )
+                    if not placed:
+                        raise Exception(f"Impossible to place object {entity.entity()} in the arena")
+                else:
+                    entity.to_origin()
+                    target = Vector3D(position.x, position.y, position.z + abs(entity.get_shape().min_vert().z))
+                    entity.set_start_position(target)
+                    shape = entity.get_shape()
+                    if shape.check_overlap(self.shape)[0]:
+                        logging.warning(
+                            "Configured position for object %s overlaps arena walls; re-sampling position.",
+                            entity.entity()
+                        )
+                        placed = self._place_entity_random(
+                            entity,
+                            radii_map[id(entity)],
+                            occupancy,
+                            rng,
+                            min_v,
+                            max_v
+                        )
+                        if not placed:
+                            raise Exception(f"Impossible to place object {entity.entity()} in the arena")
+                    else:
+                        self._register_shape_in_grid(shape, target, radii_map[id(entity)], occupancy)
+
+    def pack_objects_data(self) -> dict:
+        """Pack objects data."""
+        out = {}
+        for _,entities in self.objects.values():
+            shapes = []
+            positions = []
+            strengths = []
+            uncertainties = []
+            for n in range(len(entities)):
+                shapes.append(entities[n].get_shape())
+                positions.append(entities[n].get_position())
+                strengths.append(entities[n].get_strength())
+                uncertainties.append(entities[n].get_uncertainty())
+            out.update({entities[0].entity():(shapes,positions,strengths,uncertainties)})
+        return out
+
+    def _compute_entity_radii(self):
+        """Compute entity radii."""
+        radii = {}
+        max_radius = 0.0
+        for (_, entities) in self.objects.values():
+            for entity in entities:
+                entity.to_origin()
+                shape = entity.get_shape()
+                radius = self._estimate_shape_radius(shape)
+                radii[id(entity)] = radius
+                max_radius = max(max_radius, radius)
+        return radii, max_radius if max_radius > 0 else 0.1
+
+    def _estimate_shape_radius(self, shape):
+        """Estimate the shape radius."""
+        radius_getter = getattr(shape, "get_radius", None)
+        if callable(radius_getter):
+            try:
+                r = float(radius_getter())
+                if r > 0:
+                    return r
+            except Exception:
+                pass
+        if shape.vertices_list:
+            center = shape.center_of_mass()
+            return max((Vector3D(v.x - center.x, v.y - center.y, v.z - center.z).magnitude() for v in shape.vertices_list), default=0.05)
+        return 0.05
+
+    def _place_entity_random(self, entity, radius, occupancy, rng, min_v, max_v):
+        """Place entity random."""
+        attempts = 0
+        shape_n = entity.get_shape()
+        min_vert_z = abs(shape_n.min_vert().z)
+        while attempts < 500:
+            rand_pos = Vector3D(
+                Random.uniform(rng, min_v.x, max_v.x),
+                Random.uniform(rng, min_v.y, max_v.y),
+                min_vert_z
+            )
+            entity.to_origin()
+            entity.set_position(rand_pos)
+            shape = entity.get_shape()
+            if shape.check_overlap(self.shape)[0]:
+                attempts += 1
+                continue
+            if self._shape_overlaps_grid(shape, rand_pos, radius, occupancy):
+                attempts += 1
+                continue
+            entity.set_start_position(rand_pos)
+            self._register_shape_in_grid(shape, rand_pos, radius, occupancy)
+            return True
+        return False
+
+    def _shape_overlaps_grid(self, shape, position, radius, occupancy):
+        """Shape overlaps grid."""
+        if not occupancy:
+            return False
+        cells = self._cells_for_shape(position, radius, pad=1)
+        checked = set()
+        for cell in cells:
+            if cell in checked:
+                continue
+            checked.add(cell)
+            for other_shape, other_radius in occupancy.get(cell, []):
+                center_delta = Vector3D(
+                    shape.center.x - other_shape.center.x,
+                    shape.center.y - other_shape.center.y,
+                    0
+                )
+                if center_delta.magnitude() >= (radius + other_radius):
+                    continue
+                if shape.check_overlap(other_shape)[0]:
+                    return True
+        return False
+
+    def _register_shape_in_grid(self, shape, position, radius, occupancy):
+        """Register shape in grid."""
+        cells = self._cells_for_shape(position, radius)
+        for cell in cells:
+            occupancy.setdefault(cell, []).append((shape, radius))
+
+    def _cells_for_shape(self, position, radius, pad: int = 0):
+        """Cells for shape."""
+        if self._grid_cell_size is None or self._grid_cell_size <= 0:
+            return [(0, 0)]
+        origin = self._grid_origin or Vector3D()
+        cell_size = self._grid_cell_size
+        min_x = int(math.floor((position.x - radius - origin.x) / cell_size)) - pad
+        max_x = int(math.floor((position.x + radius - origin.x) / cell_size)) + pad
+        min_y = int(math.floor((position.y - radius - origin.y) / cell_size)) - pad
+        max_y = int(math.floor((position.y + radius - origin.y) / cell_size)) + pad
+        cells = []
+        for cx in range(min_x, max_x + 1):
+            for cy in range(min_y, max_y + 1):
+                cells.append((cx, cy))
+        return cells
+    
+    def pack_detector_data(self) -> dict:
+        """Pack detector data."""
+        out = {}
+        for _,entities in self.objects.values():
+            shapes = []
+            positions = []
+            for n in range(len(entities)):
+                shapes.append(entities[n].get_shape())
+                positions.append(entities[n].get_position())
+            out.update({entities[0].entity():(shapes,positions)})
+        return out
+    
+    def _apply_gui_backpressure(self, gui_in_queue: mp.Queue):
+        """Pause the simulation loop when the GUI cannot keep up with rendering."""
+        if not self._gui_backpressure_enabled or gui_in_queue is None:
+            return
+        threshold = self._gui_backpressure_threshold
+        if threshold <= 0:
+            return
+        try:
+            backlog = gui_in_queue.qsize()
+        except (NotImplementedError, AttributeError, OSError):
+            return
+        if backlog < threshold:
+            self._gui_backpressure_active = False
+            return
+        if not self._gui_backpressure_active:
+            logging.warning("GUI rendering is %s frames behind; slowing down ticks", backlog)
+            self._gui_backpressure_active = True
+        while True:
+            try:
+                backlog = gui_in_queue.qsize()
+            except (NotImplementedError, AttributeError, OSError):
+                break
+            if backlog < threshold:
+                break
+            time.sleep(self._gui_backpressure_interval)
+        self._gui_backpressure_active = False
+        
+    def run(self,num_runs,time_limit, arena_queue:mp.Queue, agents_queue:mp.Queue, gui_in_queue:mp.Queue,dec_arena_in:mp.Queue, gui_control_queue:mp.Queue,render:bool=False):
+        """Function to run the arena in a separate process"""
+        ticks_limit = time_limit*self.ticks_per_second + 1 if time_limit > 0 else 0
+        run = 1
+        while run < num_runs + 1:
+            logging.info(f"Run number {run} started")
+            arena_data = {
+                "status": [0,self.ticks_per_second],
+                "objects": self.pack_objects_data()
+            }
+            if render:
+                gui_in_queue.put({**arena_data, "agents_shapes": self.agents_shapes, "agents_spins": self.agents_spins, "agents_metadata": self.agents_metadata})
+                self._apply_gui_backpressure(gui_in_queue)
+            arena_queue.put({**arena_data, "random_seed": self.random_seed})
+
+            while agents_queue.qsize() == 0: pass
+            data_in = agents_queue.get()
+            self.agents_shapes = data_in["agents_shapes"]
+            self.agents_spins = data_in["agents_spins"]
+            self.agents_metadata = data_in.get("agents_metadata", {})
+            initial_tick_rate = data_in.get("status", [0, self.ticks_per_second])[1]
+            if self.data_handling is not None:
+                self.data_handling.new_run(
+                    run,
+                    self.agents_shapes,
+                    self.agents_spins,
+                    self.agents_metadata,
+                    initial_tick_rate
+                )
+            t = 1
+            running = False if render else True
+            step_mode = False
+            reset = False
+            last_snapshot_info = None
+            while True:
+                if ticks_limit > 0 and t >= ticks_limit: break
+                if render and gui_control_queue.qsize()>0:
+                    cmd = gui_control_queue.get()
+                    if cmd == "start":
+                        running = True
+                    elif cmd == "stop":
+                        running = False
+                    elif cmd == "step":
+                        running = False
+                        step_mode = True
+                    elif cmd == "reset":
+                        running = False
+                        reset = True
+                arena_data = {
+                    "status": [t,self.ticks_per_second],
+                    "objects": self.pack_objects_data()
+                }
+                if running or step_mode:
+                    if not render: print(f"\rarena_ticks {t}", end='', flush=True)
+                    arena_queue.put(arena_data)
+                    while data_in["status"][0]/data_in["status"][1] < t/self.ticks_per_second:
+                        if agents_queue.qsize()>0: data_in = agents_queue.get()
+                        arena_data = {
+                            "status": [t,self.ticks_per_second],
+                            "objects": self.pack_objects_data()
+                        }
+                        detector_data = {
+                            "objects": self.pack_detector_data()
+                        }
+                        if arena_queue.qsize()==0:
+                            arena_queue.put(arena_data)
+                            dec_arena_in.put(detector_data)
+
+                    if agents_queue.qsize()>0: data_in = agents_queue.get()
+                    self.agents_shapes = data_in["agents_shapes"]
+                    self.agents_spins = data_in["agents_spins"]
+                    self.agents_metadata = data_in.get("agents_metadata", {})
+                    if self.data_handling is not None:
+                        tick_stamp = data_in.get("status", [t, self.ticks_per_second])[0]
+                        tick_rate = data_in.get("status", [tick_stamp, self.ticks_per_second])[1]
+                        self.data_handling.save(
+                            self.agents_shapes,
+                            self.agents_spins,
+                            self.agents_metadata,
+                            tick_stamp,
+                            tick_rate
+                        )
+                        last_snapshot_info = (tick_stamp, tick_rate)
+                    if render:
+                        gui_in_queue.put({**arena_data, "agents_shapes": self.agents_shapes, "agents_spins": self.agents_spins, "agents_metadata": self.agents_metadata})
+                        self._apply_gui_backpressure(gui_in_queue)
+                    step_mode = False
+                    t += 1
+                elif reset:
+                    break
+                else: time.sleep(0.05)
+            if self.data_handling is not None and last_snapshot_info:
+                self.data_handling.save(
+                    self.agents_shapes,
+                    self.agents_spins,
+                    self.agents_metadata,
+                    last_snapshot_info[0],
+                    last_snapshot_info[1],
+                    force=True
+                )
+            if t < ticks_limit and not reset: break
+            if run < num_runs:
+                if not reset:
+                    run += 1
+                    self.increment_seed()
+                else:
+                    self.randomize_seed()
+                self.reset()
+                if reset:
+                    arena_data = {
+                                "status": "reset",
+                                "objects": self.pack_objects_data()
+                    }
+                    arena_queue.put(arena_data)
+                if not render: print("")
+            elif not reset:
+                run += 1
+                self.close()
+                if not render: print("")
+            else:
+                self.randomize_seed()
+                self.reset()
+                arena_data = {
+                            "status": "reset",
+                            "objects": self.pack_objects_data()
+                }
+                arena_queue.put(arena_data)
+        
+    def reset(self):
+        """Reset the component state."""
+        super().reset()
+        min_v = self.shape.min_vert()
+        max_v = self.shape.max_vert()
+        rng = self.random_generator
+        if self.data_handling is not None: self.data_handling.close(self.agents_shapes)
+        for (config, entities) in self.objects.values():
+            n_entities = len(entities)
+            for entity in entities:
+                entity.set_position(Vector3D(999, 0, 0), False)
+            for n in range(n_entities):
+                entity = entities[n]
+                entity.set_start_orientation(entity.get_start_orientation())
+                if not entity.get_orientation_from_dict():
+                    rand_angle = Random.uniform(rng, 0.0, 360.0)
+                    entity.set_start_orientation(Vector3D(0, 0, rand_angle))
+                position = entity.get_start_position()
+                if not entity.get_position_from_dict():
+                    count = 0
+                    done = False
+                    shape_n = entity.get_shape()
+                    shape_type_n = entity.get_shape_type()
+                    while not done and count < 500:
+                        done = True
+                        rand_pos = Vector3D(
+                            Random.uniform(rng, min_v.x, max_v.x),
+                            Random.uniform(rng, min_v.y, max_v.y),
+                            position.z
+                        )
+                        entity.to_origin()
+                        entity.set_position(rand_pos)
+                        shape_n = entity.get_shape()
+                        if shape_n.check_overlap(self.shape)[0]:
+                            done = False
+                        if done:
+                            for m in range(n_entities):
+                                if m == n:
+                                    continue
+                                other_entity = entities[m]
+                                other_shape = other_entity.get_shape()
+                                other_shape_type = other_entity.get_shape_type()
+                                if shape_type_n == other_shape_type and shape_n.check_overlap(other_shape)[0]:
+                                    done = False
+                                    break
+                        count += 1
+                        if done:
+                            entity.set_start_position(rand_pos)
+                    if not done:
+                        raise Exception(f"Impossible to place object {entity.entity()} in the arena")
+                else:
+                    entity.to_origin()
+                    entity.set_start_position(Vector3D(position.x, position.y, position.z + abs(entity.get_shape().min_vert().z)))
+
+    def close(self):
+        """Close the component resources."""
+        super().close()
+
+    def _update_hierarchy_from_shape(self):
+        """Update hierarchy from shape."""
+        bounds = None
+        if hasattr(self, "shape") and self.shape is not None:
+            min_v = self.shape.min_vert()
+            max_v = self.shape.max_vert()
+            bounds = Bounds2D(min_v.x, min_v.y, max_v.x, max_v.y)
+        self._hierarchy = self._create_hierarchy(bounds)
+        if hasattr(self, "shape") and self.shape is not None and hasattr(self.shape, "metadata"):
+            self.shape.metadata["hierarchy"] = self._hierarchy
+            if self._hierarchy:
+                self.shape.metadata["hierarchy_colors"] = getattr(self._hierarchy, "level_colors", {})
+                self.shape.metadata["hierarchy_node_numbers"] = {
+                    node_id: node.order for node_id, node in self._hierarchy.nodes.items()
+                }
+
+class SolidSphereArena(SolidArena):
+    
+    """Solid sphere arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        super().__init__(config_elem)
+        if self._id != "sphere":
+            raise ValueError("SolidSphereArena requires arena _id 'sphere'")
+        self.sphere_shape = self.shape
+        self.diameter = float(config_elem.arena.get("diameter", 0))
+        if self.diameter <= 0:
+            raise ValueError("SolidSphereArena requires a positive 'diameter'")
+        self.radius = self.diameter * 0.5
+        self.map_width = 2 * math.pi * self.radius
+        self.map_height = math.pi * self.radius
+        ellipse_config = {
+            "width": self.map_width,
+            "depth": self.map_height,
+            "height": 1.0,
+            "segments": int(config_elem.arena.get("segments", 96)),
+            "color": config_elem.arena.get("color", "gray")
+        }
+        # Replace the collision shape with the flattened ellipse used for simulation.
+        self.shape = Shape3DFactory.create_shape("arena","ellipse", ellipse_config)
+        min_v = self.shape.min_vert()
+        max_v = self.shape.max_vert()
+        self.wrap_config = {
+            "origin": Vector3D(min_v.x, min_v.y, 0),
+            "width": max_v.x - min_v.x,
+            "height": max_v.y - min_v.y,
+            "semi_major": self.map_width * 0.5,
+            "semi_minor": self.map_height * 0.5,
+            "projection": "ellipse"
+        }
+        logging.info(
+            "SolidSphereArena created (diameter=%.3f, ellipse_major=%.3f, ellipse_minor=%.3f)",
+            self.diameter,
+            self.wrap_config["width"],
+            self.wrap_config["height"]
+        )
+        self._update_hierarchy_from_shape()
+
+    def get_wrap_config(self):
+        """Return the wrap config."""
+        return self.wrap_config
+
+class CircularArena(SolidArena):
+    
+    """Circular arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        super().__init__(config_elem)
+        self.height = config_elem.arena.get("height", 1)
+        self.radius = config_elem.arena.get("radius", 1)
+        self.color = config_elem.arena.get("color", "white")
+        logging.info("Circular arena created successfully")
+    
+
+class RectangularArena(SolidArena):
+    
+    """Rectangular arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        super().__init__(config_elem)
+        self.height = config_elem.arena.get("height", 1)
+        self.length = config_elem.arena.get("length", 1)
+        self.width = config_elem.arena.get("width", 1)
+        self.color = config_elem.arena.get("color", "white")
+        logging.info("Rectangular arena created successfully")
+    
+class SquareArena(SolidArena):
+    
+    """Square arena."""
+    def __init__(self, config_elem:Config):
+        """Initialize the instance."""
+        super().__init__(config_elem)
+        self.height = config_elem.arena.get("height", 1)
+        self.side = config_elem.arena.get("side", 1)
+        self.color = config_elem.arena.get("color", "white")
+        logging.info("Square arena created successfully")
+    

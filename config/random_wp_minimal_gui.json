@@ -1,0 +1,38 @@
+{
+    "environment": {
+        "collisions": false,
+        "time_limit": 0,
+        "num_runs": 1,
+        "results": {},
+        "gui": {
+            "_id": "2D"
+        },
+        "arenas": {
+            "arena_0": {
+                "_id": "rectangle",
+                "width": 1.2,
+                "depth": 0.8,
+                "random_seed": 13,
+                "color": "white"
+            }
+        },
+        "objects": {},
+        "agents": {
+            "movable_0": {
+                "number": [10],
+                "shape": "cylinder",
+                "height": 0.02,
+                "diameter": 0.03,
+                "color": "blue",
+                "linear_velocity": 0.03,
+                "angular_velocity": 60,
+                "detection": {
+                    "type": "GPS",
+                    "range": "inf",
+                    "acquisition_per_second": "inf"
+                },
+                "moving_behavior": "random_way_point"
+            }
+        }
+    }
+}
