@@ -28,7 +28,7 @@ class DataHandling():
     def __init__(self, config_elem: Config):
         """Initialize the instance."""
         results_cfg = config_elem.results or {}
-        base_path = results_cfg.get("base_path") or "../data/"
+        base_path = results_cfg.get("base_path") or "./data/"
         self.agent_specs = self._normalize_specs(results_cfg.get("agent_specs"))
         self.group_specs = self._normalize_specs(results_cfg.get("group_specs"))
         legacy_specs = self._normalize_specs(results_cfg.get("model_specs"))
