@@ -54,10 +54,14 @@ class EntityFactory:
 
 class Entity:
     """Entity."""
+
+    _class_registry: dict[str, dict] = {}
+    _used_prefixes: set[tuple[str, str]] = set()
     def __init__(self,entity_type:str, config_elem: dict,_id:int=0):
         """Initialize the instance."""
         self.entity_type = entity_type
         self._id = _id
+        self._entity_uid = self._build_entity_uid(entity_type, _id)
         self.position_from_dict = False
         self.orientation_from_dict = False
         self.color = config_elem.get("color","black")
@@ -68,7 +72,7 @@ class Entity:
     
     def get_name(self):
         """Return the name."""
-        return self.entity_type+"_"+str(self._id)
+        return self._entity_uid
 
     def get_position_from_dict(self):
         """Return the position from dict."""
@@ -117,6 +121,79 @@ class Entity:
     def set_task(self, task: str | None):
         """Set the task identifier available to other subsystems."""
         self.task = task
+
+    @classmethod
+    def _normalize_class_label(cls, entity_type: str) -> str:
+        """Return the base class label extracted from the entity type."""
+        if not entity_type:
+            return ""
+        lowered = str(entity_type)
+        if entity_type.startswith("agent_"):
+            return lowered.split("agent_", 1)[1]
+        if entity_type.startswith("object_"):
+            return lowered.split("object_", 1)[1]
+        return lowered
+
+    @classmethod
+    def _sanitize_token(cls, token: str, default: str = "x") -> str:
+        """Sanitize a token so it does not contain separators used in the UID."""
+        if not token:
+            return default
+        cleaned = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in str(token).strip())
+        cleaned = cleaned.strip("._#")
+        return cleaned or default
+
+    @classmethod
+    def _primary_char(cls, label: str) -> str:
+        """Return the leading alphanumeric char for the y component."""
+        for ch in label:
+            if ch.isalnum():
+                return ch
+        return "x"
+
+    @classmethod
+    def _edge_chars(cls, label: str) -> str:
+        """Return first+last alphanumeric characters of the label."""
+        chars = [ch for ch in label if ch.isalnum()]
+        if not chars:
+            return "xx"
+        if len(chars) == 1:
+            return chars[0]
+        return f"{chars[0]}{chars[-1]}"
+
+    @classmethod
+    def _claim_class_uid(cls, class_label: str, origin_kind: str) -> tuple[str, str]:
+        """Resolve and reserve the (x, y) pair for a class, enforcing uniqueness."""
+        label = cls._sanitize_token(class_label, "class")
+        origin = cls._sanitize_token(origin_kind or "entity", "entity")
+        existing = cls._class_registry.get(label)
+        if existing:
+            if existing["origin"] != origin:
+                raise ValueError(f"Duplicate class name '{label}' used for both {existing['origin']} and {origin}")
+            return existing["x"], existing["y"]
+        base_x = cls._sanitize_token(label, "class")
+        base_y = cls._primary_char(label)
+        chosen_x, chosen_y = base_x, base_y
+        if (chosen_x, chosen_y) in cls._used_prefixes:
+            chosen_y = cls._edge_chars(label)
+            if (chosen_x, chosen_y) in cls._used_prefixes:
+                base_x = f"{base_x}{cls._edge_chars(label)}"
+                chosen_x = base_x
+                suffix = 1
+                while (chosen_x, chosen_y) in cls._used_prefixes:
+                    suffix += 1
+                    chosen_x = f"{base_x}{suffix}"
+        cls._class_registry[label] = {"x": chosen_x, "y": chosen_y, "origin": origin}
+        cls._used_prefixes.add((chosen_x, chosen_y))
+        return chosen_x, chosen_y
+
+    def _build_entity_uid(self, entity_type: str, numeric_id: int | str) -> str:
+        """Construct the stable UID in the form x.y#z."""
+        class_label = self._normalize_class_label(entity_type)
+        origin_kind = entity_type.split("_", 1)[0] if entity_type else "entity"
+        x_token, y_token = self._claim_class_uid(class_label, origin_kind)
+        z_token = self._sanitize_token(numeric_id, "0") if isinstance(numeric_id, str) else str(numeric_id)
+        return f"{x_token}.{y_token}#{z_token}"
     
 class Object(Entity):    
     """Object."""
