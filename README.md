@@ -1,8 +1,8 @@
 # Decision Making Simulation Framework
 
-**CollectiPy** is not designed to offer physically realistic simulations. It does not include a physics engine, nor does it attempt to model complex physical dynamics. The environment is intentionally simplified to enable rapid experimentation with ideas, algorithms, and theoretical models, serving as an initial validation layer before moving to more physically accurate tools.
+**CollectiPy** is not designed to offer physically realistic simulations. It does not include a physics engine, nor does it attempt to model complex physical dynamics. The environment is intentionally simplified to enable rapid experimentation with ideas, algorithms, and theoretical models, serving as an initial validation layer before moving to more accurate tools.
 
-This framework is designed to implement simulations for both single and multi-agent systems, with support for multiprocessing. It includes base classes to create a working arena where physical agents and/or objects can be deployed. Custom arenas can be built in the `arenas` folder. Additionally, there are base classes to provide a GUI, which can be switched off if not needed. Entities, which can be agents, objects, or highlighted areas in the arena, are also supported. A data handling class is provided to store data in a predefined format.
+This framework is designed to implement simulations for both single and multi-agent systems. It includes base classes to create a working arena where physical agents and/or objects can be deployed. Custom arenas can be built. Additionally, there are base classes to provide a GUI, which can be switched off if not needed. Entities, which can be agents, objects, or highlighted areas in the arena. A data handling class is provided to store data in a predefined format.
 
 ## Quick Start
 
