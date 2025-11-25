@@ -1,8 +1,16 @@
+# ------------------------------------------------------------------------------
+#  CollectiPy
+#  Copyright (c) 2025 Fabio Oddi
+#
+#  This file is part of CollectyPy, released under the BSD 3-Clause License.
+#  You may use, modify, and redistribute this file according to the terms of the
+#  license. Attribution is required if this code is used in other works.
+# ------------------------------------------------------------------------------
+
 import logging
 import math
 import numpy as np
-
-from models.spinsystem_B import SpinSystemB
+from models.spinsystem import SpinSystem
 from plugin_base import MovementModel
 from plugin_registry import (
     get_detection_model,
@@ -11,40 +19,64 @@ from plugin_registry import (
 )
 from models.utils import normalize_angle
 
-logger = logging.getLogger("sim.spin_B")
+logger = logging.getLogger("sim.spin")
 
-class SpinMovementModelB(MovementModel):
-    """Spin movement model B: uses SpinSystemB and expects visual detection providing V and dV."""
-
+class SpinMovementModel(MovementModel):
+    """Spin movement model."""
     def __init__(self, agent):
+        """Initialize the instance."""
         self.agent = agent
         self.spin_model_params = agent.config_elem.get("spin_model", {})
-        # keep many parameters consistent with original
+        
         self.spin_pre_run_steps = self.spin_model_params.get("spin_pre_run_steps", 0)
         self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 10)
+        
+        self.perception_width = self.spin_model_params.get("perception_width", 0.5)
+        
         self.num_groups = self.spin_model_params.get("num_groups", 16)
         self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 8)
+        
+        self.perception_global_inhibition = self.spin_model_params.get("perception_global_inhibition", 0)
+        
+        agent_task = agent.get_task() if hasattr(agent, "get_task") else None
+        spin_task = self.spin_model_params.get("task")
+        self.task = agent_task or spin_task or "selection"
+        if agent_task is None and hasattr(agent, "set_task"):
+            agent.set_task(self.task)
+
         self.reference = self.spin_model_params.get("reference", "egocentric")
         self.fallback_behavior = agent.config_elem.get("fallback_moving_behavior", "none")
-
-        # vision coefficients passed to spin system (defaults can be overridden by config)
-        self.alpha0 = float(self.spin_model_params.get("alpha0", 1.0))
-        self.alpha1 = float(self.spin_model_params.get("alpha1", 0.0))
-        self.alpha2 = float(self.spin_model_params.get("alpha2", 0.0))
-        self.beta0  = float(self.spin_model_params.get("beta0", 1.0))
-        self.beta1  = float(self.spin_model_params.get("beta1", 0.0))
-        self.beta2  = float(self.spin_model_params.get("beta2", 0.0))
-
+        
+        self.group_angles = np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False)
         self.perception = None
-        self._active_perception_channel = "visual"  # we expect visual detection
+        self._active_perception_channel = "objects"
         self.perception_range = self._resolve_detection_range()
+        self.spin_system = None
         self._fallback_model = None
-
-        # create detection model (likely "VISUAL")
         self.detection_model = self._create_detection_model()
+        self.reset()
 
-        # instantiate spin system B
-        self.spin_system = SpinSystemB(
+    def _create_detection_model(self):
+        """Create detection model."""
+        context = {
+            "num_groups": self.num_groups,
+            "num_spins_per_group": self.num_spins_per_group,
+            "perception_width": self.perception_width,
+            "group_angles": self.group_angles,
+            "reference": self.reference,
+            "perception_global_inhibition": self.perception_global_inhibition,
+            "max_detection_distance": self.perception_range,
+            "detection_config": getattr(self.agent, "detection_config", {}),
+        }
+        detection_name = getattr(self.agent, "detection", None)
+        if not detection_name:
+            detection_name = self.agent.config_elem.get("detection", "GPS")
+        return get_detection_model(detection_name, self.agent, context)
+
+    def reset(self) -> None:
+        """Reset the component state."""
+        self.perception = None
+        self.spin_system = SpinSystem(
             self.agent.random_generator,
             self.num_groups,
             self.num_spins_per_group,
@@ -54,103 +86,177 @@ class SpinMovementModelB(MovementModel):
             float(self.spin_model_params.get("p_spin_up", 0.5)),
             int(self.spin_model_params.get("time_delay", 1)),
             self.spin_model_params.get("dynamics", "metropolis"),
-            alpha0=self.alpha0,
-            alpha1=self.alpha1,
-            alpha2=self.alpha2,
-            beta0=self.beta0,
-            beta1=self.beta1,
-            beta2=self.beta2,
+
         )
 
-    def _create_detection_model(self):
-        context = {
-            "num_groups": self.num_groups,
-            "num_spins_per_group": self.num_spins_per_group,
-            "max_detection_distance": self.perception_range,
-        }
-        detection_name = getattr(self.agent, "detection", None)
-        if not detection_name:
-            detection_name = self.agent.config_elem.get("detection", "VISUAL")
-        return get_detection_model(detection_name, self.agent, context)
+
+    # stabilizza lo spin system 
+    def pre_run(self, objects: dict, agents: dict) -> None:
+        """Pre run."""
+        if self.spin_pre_run_steps <= 0:
+            return
+        self._update_perception(objects, agents, None, None)
+        if self.perception is None:
+            return
+        for _ in range(self.spin_pre_run_steps):
+            self.spin_system.step(timedelay=False)
+        self.spin_system.set_p_spin_up(np.mean(self.spin_system.get_states()))
+        self.spin_system.reset_spins()
+        logger.debug("%s spin pre-run completed (%d steps)", self.agent.get_name(), self.spin_pre_run_steps)
 
     def step(self, agent, tick: int, arena_shape, objects: dict, agents: dict) -> None:
-        # sample detection
-        snapshot = None
-        if self.detection_model is not None:
-            snapshot = self.detection_model.sense(self.agent, objects, agents, arena_shape)
-
-        if snapshot is None:
+        """Execute the simulation step."""
+        # campo per ring attractor
+        self._update_perception(objects, agents, tick, arena_shape)
+        # fallback se non percepisce
+        if self.perception is None or not np.any(self.perception > 0):
             self._run_fallback(tick, arena_shape, objects, agents)
             return
-
-        # Expect snapshot either raw array or dict produced by VisualDetectionModel
-        if isinstance(snapshot, dict):
-            # try to pick visual channel keys
-            V = snapshot.get("V")
-            dV = snapshot.get("dV")
-            angles = snapshot.get("angles", None)
-            # fallback: if detection returns channels objects/agents, try combined
-            if V is None and "combined" in snapshot:
-                V = snapshot["combined"]
-                dV = np.zeros_like(V)
-        else:
-            # snapshot is raw array -> treat as V
-            V = np.asarray(snapshot)
-            dV = np.roll(V, -1) - V
-
-        if V is None:
-            self._run_fallback(tick, arena_shape, objects, agents)
-            return
-
-        # Normalize/shape V and dV to spin_system expectations:
-        # expected length prefer num_groups or groups*num_spins
-        if V.size == self.num_groups:
-            # expand to spins
-            V_exp = np.repeat(V, self.num_spins_per_group)
-            dV_exp = np.repeat(dV, self.num_spins_per_group)
-        else:
-            V_exp = V.ravel()
-            dV_exp = dV.ravel()
-
-        # build external field following Eq. 3/4 expansion (we focus on turning-like input for ring)
-        # Here we use beta-like coefficients to set the stimulus for the ring (turning).
-        # field = beta0 * ( -V + beta1 * (dV^2) )
-        field = self.beta0 * ( - V_exp + self.beta1 * (dV_exp ** 2) )
-
-        # feed spin system and run spins
-        self.spin_system.update_external_field(field)
+        # vettore di attivazioni angolari
+        self.spin_system.update_external_field(self.perception)
+        # aggiorna dinamica spin
         self.spin_system.run_spins(steps=self.spin_per_tick)
 
-        # compute average direction from spin system
+        # picco attività del ring
         angle_rad = self.spin_system.average_direction_of_activity()
+        
+        # interrompi se non valido
         if angle_rad is None:
-            self._run_fallback(tick, arena_shape, objects, agents)
             return
-
-        # convert to agent reference if needed
+        # coordinate allocentriche se richiesto
         if self.reference == "allocentric":
             angle_rad = angle_rad - math.radians(self.agent.orientation.z)
+        
+        # conversione in gradi e clamp dell'angolo
         angle_deg = normalize_angle(math.degrees(angle_rad))
         angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
-
+        
+        # calcola larghezza del bump
         width = self.spin_system.get_width_of_activity()
+        
+        # riduzione velocità lineare quando non sicuro (
         scaling_factor = 1.0 / width if width and width > 0 else 0.0
         scaling_factor = np.clip(scaling_factor, 0.0, 1.0)
-
-        # set movement commands on agent: linear depends on concentration, angular on angle_deg
+        
+        # velocità lineare determinata dalla certezza percettiva
         self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling_factor
+        # velocità angolare punta verso il picco del ring-attractor
         self.agent.angular_velocity_cmd = angle_deg
-
+        
+        # log
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "%s (B) spin updated -> angle=%.2f width=%s scaling=%.3f",
+                "%s spin direction updated -> angle=%.2f width=%.4f scaling=%.3f",
                 self.agent.get_name(),
                 angle_deg,
-                str(width),
+                width,
                 scaling_factor
             )
 
+    #def vision_field()
+
+
+    def _update_perception(self, objects: dict, agents: dict, tick: int | None = None, arena_shape=None) -> None:
+        """Update perception."""
+        if self.detection_model is None:
+            self.perception = None
+            return
+        if tick is not None and hasattr(self.agent, "should_sample_detection"):
+            if not self.agent.should_sample_detection(tick):
+                return
+        snapshot = self.detection_model.sense(self.agent, objects, agents, arena_shape)
+        if snapshot is None:
+            self.perception = None
+            return
+        if isinstance(snapshot, dict):
+            selected, channel_name = self._select_perception_channel(snapshot)
+        else:
+            selected, channel_name = snapshot, "raw"
+        self.perception = selected
+        self._active_perception_channel = channel_name
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "%s perception snapshot channel=%s mean=%.3f",
+                self.agent.get_name(),
+                channel_name,
+                float(np.mean(self.perception)) if self.perception is not None else 0.0,
+            )
+
+    # quale canale sensoriale:
+    def _select_perception_channel(self, snapshot: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
+        """Select the perception channel matching the current task."""
+        task_name = (self.agent.get_task() or self.task or "selection").lower()
+        objects_channel = snapshot.get("objects")
+        agents_channel = snapshot.get("agents")
+        combined_channel = snapshot.get("combined")
+        if task_name in ("selection", "objects"): # task è guidato dagli oggetti
+            return self._channel_with_fallback(
+                (objects_channel, "objects"),
+                (combined_channel, "combined"),
+                (agents_channel, "agents"),
+            )
+        if task_name in ("flocking", "agents"): # task è guidato dagli agenti
+            return self._channel_with_fallback(
+                (agents_channel, "agents"),
+                (combined_channel, "combined"),
+                (objects_channel, "objects"),
+            )
+        if task_name in ("all", "combined", "hybrid", "group", "group_hunt"): # task è guidato da entrambi
+            return self._channel_with_fallback(
+                (combined_channel, "combined"),
+                (objects_channel, "objects"),
+                (agents_channel, "agents"),
+            )
+        logger.warning("%s unknown task '%s', using combined perception", self.agent.get_name(), task_name)
+        return self._channel_with_fallback(
+            (combined_channel, "combined"),
+            (objects_channel, "objects"),
+            (agents_channel, "agents"),
+        )
+
+    def _channel_with_fallback(
+        self,
+        primary: tuple[np.ndarray | None, str],
+        secondary: tuple[np.ndarray | None, str],
+        tertiary: tuple[np.ndarray | None, str],
+    ) -> tuple[np.ndarray, str]:
+        """Return first available perception channel from the provided priority list."""
+        for channel, name in (primary, secondary, tertiary):
+            if channel is not None:
+                return channel, name
+        raise ValueError("Detection model did not provide any perception channels")
+
+    def _resolve_detection_range(self) -> float:
+        """Resolve the maximum detection radius from the agent configuration."""
+        if hasattr(self.agent, "get_detection_range"):
+            try:
+                return float(self.agent.get_detection_range())
+            except (TypeError, ValueError):
+                logger.warning(
+                    "%s provided invalid detection range via accessor; falling back to legacy config",
+                    self.agent.get_name()
+                )
+        config_elem = getattr(self.agent, "config_elem", {})
+        settings = {}
+        if isinstance(config_elem, dict):
+            settings = config_elem.get("detection_settings", {}) or {}
+        range_candidate = None
+        if isinstance(settings, dict):
+            range_candidate = settings.get("range", settings.get("distance"))
+        if range_candidate is None and isinstance(config_elem, dict):
+            range_candidate = config_elem.get("perception_distance")
+        if range_candidate is None and hasattr(self.agent, "perception_distance"):
+            range_candidate = self.agent.perception_distance
+        if range_candidate is None:
+            return math.inf
+        try:
+            return float(range_candidate)
+        except (TypeError, ValueError):
+            logger.warning("%s invalid detection range '%s', using infinite distance", self.agent.get_name(), range_candidate)
+            return math.inf
+
     def _run_fallback(self, tick: int, arena_shape, objects: dict, agents: dict) -> None:
+        """Run the fallback."""
         if self.fallback_behavior in ("spin_model","none"):
             return
         behavior = self.fallback_behavior
@@ -162,7 +268,19 @@ class SpinMovementModelB(MovementModel):
         if self._fallback_model is None:
             logger.warning("%s has no fallback movement model configured", self.agent.get_name())
             return
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("%s fallback to %s", self.agent.get_name(), behavior)
         self._fallback_model.step(self.agent, tick, arena_shape, objects, agents)
 
+    def get_spin_system_data(self):
+        """Return the spin system data."""
+        if not self.spin_system:
+            return None
+        return (
+            self.spin_system.get_states(),
+            self.spin_system.get_angles(),
+            self.spin_system.get_external_field(),
+            self.spin_system.get_avg_direction_of_activity(),
+        )
 
-register_movement_model("spin_model_B", lambda agent: SpinMovementModelB(agent))
+register_movement_model("spin_model", lambda agent: SpinMovementModel(agent))

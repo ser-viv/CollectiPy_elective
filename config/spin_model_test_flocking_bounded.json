@@ -23,8 +23,8 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 3,
-                "number": [7],
+                "ticks_per_second": 5,
+                "number": [2],
                 "shape": "cylinder",
                 "linear_velocity": 0.01,
                 "angular_velocity": 10,
@@ -32,11 +32,11 @@
                 "diameter": 0.033,
                 "color": "blue",
                 "detection": {
-                    "type": "GPS",
-                    "range": "inf",
+                    "type": "VISUAL",
+                    "range": 3,
                     "acquisition_per_second": 1
                 },
-                "moving_behavior":"spin_model",
+                "moving_behavior":"spin_model_B",
                 "spin_model":{
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
@@ -50,7 +50,11 @@
                     "time_delay": 1,
                     "reference": "allocentric",
                     "dynamics": "metropolis",
-                    "task": "flocking"
+                    "task": "flocking",
+                    "alpha0": 10.0,
+                    "alpha1": 0.5,
+                    "beta0": 1.0,
+                    "beta1": 0.5
                 }
             }
         }   

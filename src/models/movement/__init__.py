@@ -16,4 +16,4 @@ Importing submodules registers the built-in movement models.
 # Register built-in models on import.
 from . import random_walk  # noqa: F401
 from . import random_way_point  # noqa: F401
-from . import spin_model  # noqa: F401
+from . import spin_model_B  # noqa: F401

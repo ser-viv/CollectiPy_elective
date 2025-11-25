@@ -27,19 +27,26 @@ class SpinMovementModel(MovementModel):
         """Initialize the instance."""
         self.agent = agent
         self.spin_model_params = agent.config_elem.get("spin_model", {})
+        
         self.spin_pre_run_steps = self.spin_model_params.get("spin_pre_run_steps", 0)
         self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 10)
+        
         self.perception_width = self.spin_model_params.get("perception_width", 0.5)
+        
         self.num_groups = self.spin_model_params.get("num_groups", 16)
         self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 8)
+        
         self.perception_global_inhibition = self.spin_model_params.get("perception_global_inhibition", 0)
+        
         agent_task = agent.get_task() if hasattr(agent, "get_task") else None
         spin_task = self.spin_model_params.get("task")
         self.task = agent_task or spin_task or "selection"
         if agent_task is None and hasattr(agent, "set_task"):
             agent.set_task(self.task)
+
         self.reference = self.spin_model_params.get("reference", "egocentric")
         self.fallback_behavior = agent.config_elem.get("fallback_moving_behavior", "none")
+        
         self.group_angles = np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False)
         self.perception = None
         self._active_perception_channel = "objects"
@@ -79,8 +86,11 @@ class SpinMovementModel(MovementModel):
             float(self.spin_model_params.get("p_spin_up", 0.5)),
             int(self.spin_model_params.get("time_delay", 1)),
             self.spin_model_params.get("dynamics", "metropolis"),
+
         )
 
+
+    # stabilizza lo spin system 
     def pre_run(self, objects: dict, agents: dict) -> None:
         """Pre run."""
         if self.spin_pre_run_steps <= 0:
@@ -96,24 +106,44 @@ class SpinMovementModel(MovementModel):
 
     def step(self, agent, tick: int, arena_shape, objects: dict, agents: dict) -> None:
         """Execute the simulation step."""
+        # campo per ring attractor
         self._update_perception(objects, agents, tick, arena_shape)
+        # fallback se non percepisce
         if self.perception is None or not np.any(self.perception > 0):
             self._run_fallback(tick, arena_shape, objects, agents)
             return
+        # vettore di attivazioni angolari
         self.spin_system.update_external_field(self.perception)
+        # aggiorna dinamica spin
         self.spin_system.run_spins(steps=self.spin_per_tick)
+
+        # picco attività del ring
         angle_rad = self.spin_system.average_direction_of_activity()
+        
+        # interrompi se non valido
         if angle_rad is None:
             return
+        # coordinate allocentriche se richiesto
         if self.reference == "allocentric":
             angle_rad = angle_rad - math.radians(self.agent.orientation.z)
+        
+        # conversione in gradi e clamp dell'angolo
         angle_deg = normalize_angle(math.degrees(angle_rad))
         angle_deg = max(min(angle_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
+        
+        # calcola larghezza del bump
         width = self.spin_system.get_width_of_activity()
+        
+        # riduzione velocità lineare quando non sicuro (
         scaling_factor = 1.0 / width if width and width > 0 else 0.0
         scaling_factor = np.clip(scaling_factor, 0.0, 1.0)
+        
+        # velocità lineare determinata dalla certezza percettiva
         self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling_factor
+        # velocità angolare punta verso il picco del ring-attractor
         self.agent.angular_velocity_cmd = angle_deg
+        
+        # log
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "%s spin direction updated -> angle=%.2f width=%.4f scaling=%.3f",
@@ -122,6 +152,9 @@ class SpinMovementModel(MovementModel):
                 width,
                 scaling_factor
             )
+
+    # def vision_field()
+
 
     def _update_perception(self, objects: dict, agents: dict, tick: int | None = None, arena_shape=None) -> None:
         """Update perception."""
@@ -149,25 +182,26 @@ class SpinMovementModel(MovementModel):
                 float(np.mean(self.perception)) if self.perception is not None else 0.0,
             )
 
+    # quale canale sensoriale:
     def _select_perception_channel(self, snapshot: dict[str, np.ndarray]) -> tuple[np.ndarray, str]:
         """Select the perception channel matching the current task."""
         task_name = (self.agent.get_task() or self.task or "selection").lower()
         objects_channel = snapshot.get("objects")
         agents_channel = snapshot.get("agents")
         combined_channel = snapshot.get("combined")
-        if task_name in ("selection", "objects"):
+        if task_name in ("selection", "objects"): # task è guidato dagli oggetti
             return self._channel_with_fallback(
                 (objects_channel, "objects"),
                 (combined_channel, "combined"),
                 (agents_channel, "agents"),
             )
-        if task_name in ("flocking", "agents"):
+        if task_name in ("flocking", "agents"): # task è guidato dagli agenti
             return self._channel_with_fallback(
                 (agents_channel, "agents"),
                 (combined_channel, "combined"),
                 (objects_channel, "objects"),
             )
-        if task_name in ("all", "combined", "hybrid", "group", "group_hunt"):
+        if task_name in ("all", "combined", "hybrid", "group", "group_hunt"): # task è guidato da entrambi
             return self._channel_with_fallback(
                 (combined_channel, "combined"),
                 (objects_channel, "objects"),
