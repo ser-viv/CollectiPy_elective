@@ -16,6 +16,7 @@ _PI = math.pi
 
 class SpinSystem:
     """Spin system."""
+    
     def __init__(self, random_generator:Random, num_groups:int, num_spins_per_group:int, T:float, J:float, nu:float, p_spin_up:float=0.5, time_delay:int=1, dynamics:str='metropolis'):
         """Initialize the instance."""
         self.random_generator = random_generator

@@ -1,94 +1,201 @@
+import logging
 import math
 import numpy as np
-import logging
-
 from plugin_base import DetectionModel
 from plugin_registry import register_detection_model
+from models.utils import normalize_angle
 
 logger = logging.getLogger("sim.detection.visual")
 
 
 class VisualDetectionModel(DetectionModel):
+    """
+    Modello visivo compatibile con il ring attractor.
+    Restituisce gli stessi canali del GPS:
+        - agents
+        - objects
+        - combined
+
+    Differenza chiave:
+        al posto della gaussiana del GPS, usa l'occlusione angolare (subtended angle)
+        e la sua intersezione con ogni settore del ring.
+    """
 
     def __init__(self, agent, context=None):
         self.agent = agent
         context = context or {}
 
-        # numero di raggi (risoluzione angolare)
-        self.n_bins = context.get("n_bins", 360)
+        self.num_groups = context.get("num_groups", 1)
+        self.num_spins_per_group = context.get("num_spins_per_group", 1)
+        self.perception_width = context.get("perception_width", 0.5)
 
-        # distanza massima di visione
-        self.max_distance = float(
-            context.get("max_detection_distance",
-                        getattr(agent, "perception_distance", math.inf))
+        # angoli dei gruppi (radianti) → come richiesto dal ring system
+        self.group_angles = context.get(
+            "group_angles",
+            np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False)
         )
 
-        # raggio degli agenti, se utile
-        self.agent_size = context.get("agent_size", 0.1)
+        self.reference = context.get("reference", "egocentric")
+        self.perception_global_inhibition = context.get("perception_global_inhibition", 0)
 
-        # precomputo angoli
-        self.phi_array = np.linspace(-math.pi, math.pi, self.n_bins, endpoint=False)
+        self.max_detection_distance = float(
+            context.get("max_detection_distance",
+                getattr(self.agent, "perception_distance", math.inf))
+        )
 
-
-    def sense(self, agent, objects, agents, arena_shape):
+    # =====================================================================
+    # SENSE (uguale interfaccia GPS)
+    # =====================================================================
+    def sense(self, agent, objects: dict, agents: dict, arena_shape=None):
         """
-        Ricostruisce:
-          - V(phi): campo visivo binario
-          - dV(phi): derivata angolare (bordi visivi)
+        Restituisce un dict con:
+            objects:  num_groups*num_spins_per_group
+            agents:   num_groups*num_spins_per_group
+            combined: somma dei due
         """
+        channel_size = self.num_groups * self.num_spins_per_group
 
-        V = np.zeros(self.n_bins)
+        agent_channel = np.zeros(channel_size)
+        object_channel = np.zeros(channel_size)
 
-        # posizione osservatore
-        ax, ay = agent.position.x, agent.position.y
-        heading = math.radians(agent.orientation.z)
+        # stessa gerarchia del GPS
+        hierarchy = self._resolve_hierarchy(agent, arena_shape)
 
-        # raccogli lista di agenti bersaglio
-        target_positions = []
-        for club, shapes in agents.items():
-            for shape in shapes:
-                if shape is agent:  
-                    continue
-                pos = shape.center_of_mass()
-                target_positions.append((pos.x, pos.y))
+        # raccoglie agenti → occlusione angolare
+        self._collect_agent_targets(agent_channel, agents, hierarchy)
 
-        # per ogni direzione φ -> ray casting
-        for i, phi in enumerate(self.phi_array):
+        # raccoglie oggetti → occlusione angolare
+        self._collect_object_targets(object_channel, objects)
 
-            # direzione assoluta del raggio
-            world_phi = phi + heading
+        # global inhibition come nel GPS
+        self._apply_global_inhibition(agent_channel)
+        self._apply_global_inhibition(object_channel)
 
-            # raggio
-            rx = math.cos(world_phi)
-            ry = math.sin(world_phi)
-
-            # controlla intersezioni con tutti i bersagli
-            for (tx, ty) in target_positions:
-                dx = tx - ax
-                dy = ty - ay
-
-                # proiezione del vettore target sul raggio
-                proj = dx * rx + dy * ry
-
-                if proj < 0:
-                    continue  # target dietro
-
-                # distanza minima punto–raggio
-                perp = abs(dx * ry - dy * rx)
-
-                if perp < self.agent_size and proj < self.max_distance:
-                    V[i] = 1
-                    break
-
-        # derivata angolare
-        dV = np.roll(V, -1) - V
+        combined = agent_channel + object_channel
 
         return {
-            "V": V,
-            "dV": dV,
-            "angles": self.phi_array
+            "objects": object_channel,
+            "agents": agent_channel,
+            "combined": combined,
         }
 
+    # =====================================================================
+    # RACCOLTA TARGET (AGENTI)
+    # =====================================================================
+    def _collect_agent_targets(self, perception, agents, hierarchy):
+        for club, agent_shapes in agents.items():
+            for n, shape in enumerate(agent_shapes):
+                meta = getattr(shape, "metadata", {}) if hasattr(shape, "metadata") else {}
+                target_name = meta.get("entity_name")
 
-# registra il modello nel sistema
+                # ignorare sé stessi
+                if target_name:
+                    if target_name == self.agent.get_name():
+                        continue
+                elif f"{club}_{n}" == self.agent.get_name():
+                    continue
+
+                target_node = meta.get("hierarchy_node")
+                if not self._hierarchy_allows_agent(target_node, hierarchy):
+                    continue
+
+                agent_pos = shape.center_of_mass()
+                dx = agent_pos.x - self.agent.position.x
+                dy = agent_pos.y - self.agent.position.y
+                dz = agent_pos.z - self.agent.position.z
+
+                radius = getattr(shape, "bounding_radius", 0.15)
+                
+                # diverso da gps
+                self._accumulate_occlusion(perception, dx, dy, dz, radius, strength=5.0)
+
+    # =====================================================================
+    # RACCOLTA OGGETTI
+    # =====================================================================
+    def _collect_object_targets(self, perception, objects):
+        for _, (shapes, positions, strengths, uncertainties) in objects.items():
+            for i in range(len(shapes)):
+                dx = positions[i].x - self.agent.position.x
+                dy = positions[i].y - self.agent.position.y
+                dz = positions[i].z - self.agent.position.z
+
+                # diverso da gps
+                radius = getattr(shapes[i], "bounding_radius", 0.2)
+                strength = strengths[i]
+
+                self._accumulate_occlusion(perception, dx, dy, dz, radius, strength)
+
+    # =====================================================================
+    # GLOBAL INHIBITION
+    # =====================================================================
+    def _apply_global_inhibition(self, perception_channel):
+        if self.perception_global_inhibition == 0:
+            return
+        perception_channel -= self.perception_global_inhibition
+
+    # =====================================================================
+    # ACCUMULO BASATO SU OCCLUSIONE ANGOLARE (subtended angle)
+    # =====================================================================
+    def _accumulate_occlusion(self, perception, dx, dy, dz, radius, strength):
+        distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+        if distance > self.max_detection_distance:
+            return
+
+        # angolo relativo
+        angle = math.degrees(math.atan2(-dy, dx))
+ 
+        angle = normalize_angle(angle)  # ritorna in [-180,180]
+
+        angle_rad = math.radians(angle)
+
+        # subtended angle
+        half_subt = math.atan(radius / max(distance, 1e-6))
+
+        obj_min = angle_rad - half_subt
+        obj_max = angle_rad + half_subt
+
+        for g, center in enumerate(self.group_angles):
+            sec_min = center - self.perception_width/2
+            sec_max = center + self.perception_width/2
+
+            inter = self._interval_intersection(obj_min, obj_max, sec_min, sec_max)
+            if inter <= 0:
+                continue
+
+            # normalizzazione interna
+            frac = (inter / self.perception_width) * strength
+
+            # replica per spin interno al gruppo
+            start = g * self.num_spins_per_group
+            end = start + self.num_spins_per_group
+            perception[start:end] += frac
+
+    # =====================================================================
+    # UTILS
+    # =====================================================================
+    @staticmethod
+    def _interval_intersection(a1, a2, b1, b2):
+        left = max(a1, b1)
+        right = min(a2, b2)
+        return max(0.0, right - left)
+
+    @staticmethod
+    def _resolve_hierarchy(agent, arena_shape):
+        if arena_shape is not None:
+            metadata = getattr(arena_shape, "metadata", None)
+            if metadata:
+                hierarchy = metadata.get("hierarchy")
+                if hierarchy:
+                    return hierarchy
+        return getattr(agent, "hierarchy_context", None)
+
+    
+    def _hierarchy_allows_agent(self, target_node, hierarchy) -> bool:
+        """Return True if the observer can interact with the target based on hierarchy."""
+        checker = getattr(self.agent, "allows_hierarchical_link", None)
+        if not callable(checker):
+            return True
+        return checker(target_node, "detection", hierarchy)
+
+
 register_detection_model("VISUAL", lambda agent, context=None: VisualDetectionModel(agent, context))
