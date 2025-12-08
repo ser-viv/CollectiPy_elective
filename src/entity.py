@@ -1267,7 +1267,7 @@ class MovableAgent(StaticAgent):
         """Initialize the instance."""
         super().__init__(entity_type,config_elem,_id)
         self.config_elem = config_elem
-        self.max_absolute_velocity = float(config_elem.get("linear_velocity",0.01)) / self.ticks_per_second
+        self.max_absolute_velocity = float(config_elem.get("max_absolute_velocity",1.0)) / self.ticks_per_second
         self.max_angular_velocity = int(config_elem.get("angular_velocity",10)) / self.ticks_per_second
         self.forward_vector = Vector3D()
         self.delta_orientation = Vector3D()

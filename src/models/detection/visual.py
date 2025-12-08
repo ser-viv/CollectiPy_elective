@@ -65,11 +65,13 @@ class VisualDetectionModel(DetectionModel):
         self._collect_agent_targets(agent_channel, agents, hierarchy)
 
         # raccoglie oggetti → occlusione angolare
-        self._collect_object_targets(object_channel, objects)
+        #self._collect_object_targets(object_channel, objects)
 
         # global inhibition come nel GPS
         self._apply_global_inhibition(agent_channel)
         self._apply_global_inhibition(object_channel)
+
+        object_channel[:] = 0.0
 
         combined = agent_channel + object_channel
 

@@ -152,57 +152,76 @@ class SpinMovementModelB(MovementModel):
 
         # ---- compute approximations of the integrals from discrete perception ----
         # perception may be flattened length G*N; aggregate per group
-        flat = np.asarray(self.perception, dtype=float).ravel()
+        # ---- compute approximations of the integrals from discrete perception ----
+        ### Usa SOLO gli agenti, non il canale selected dal ring
+        vis = self.detection_model.sense(self.agent, objects, agents, arena_shape)
+        agent_field = vis["agents"]   # vettore num_groups * num_spins_per_group
+        flat = np.asarray(agent_field).ravel()
+
+        
         if flat.size == self.num_groups * self.num_spins_per_group:
             per_group = flat.reshape(self.num_groups, self.num_spins_per_group).mean(axis=1)
         elif flat.size == self.num_groups:
             per_group = flat.copy()
         else:
-            # fallback: try to reshape safely
             per_group = np.repeat(np.mean(flat), self.num_groups)
-
-        # approximate integrals:
-        #  accel_integral ≈ ∑ cos(phi) * G[V(phi)]
-        #accel_integral = float(np.sum(per_group * np.cos(self.group_angles)))
-        #  turn_integral  ≈ ∑ sin(phi) * G[V(phi)]
-        #turn_integral = float(np.sum(per_group * np.sin(self.group_angles)))
-
+        
+        # --- NORMALIZZAZIONE ROBUSTA ---
+        eps = 1e-9
+        raw_mean = float(np.mean(per_group)) if per_group.size else 0.0
+        raw_max = float(np.max(per_group)) if per_group.size else 0.0
+        
+        # Preferenza: se hai una scala massima nota, mettine qui il nome; altrimenti usa raw_max.
+        # Se detection_model fornisce un "max_possible" usalo. Qui uso safe_max che evita divisione per valori troppo piccoli.
+        safe_max = max(raw_max, 1.0)  # usa 1.0 come fallback (evita amplificazioni eccessive)
+        # se preferisci normalizzare rispetto alla portata fisica:
+        # safe_max = max(raw_max, float(self.perception_range) if np.isfinite(self.perception_range) else 1.0)
+        
+        Vk = per_group / (safe_max + eps)
+        
+        # Clip su [0,1] per sicurezza
+        Vk = np.clip(Vk, 0.0, 1.0)
+        
+        # OPTIONAL: smoothing esponenziale (component-wise) per evitare scatti tick-to-tick
+        ema_alpha = float(self.spin_model_params.get("perception_ema_alpha", 0.25))
+        if not hasattr(self, "_vk_ema") or self._vk_ema is None:
+            self._vk_ema = Vk.copy()
+        else:
+            self._vk_ema = ema_alpha * Vk + (1.0 - ema_alpha) * self._vk_ema
+        Vk = self._vk_ema.copy()
+        
+        # --- derivative (dV/dphi) su Vk normalizzato ---
         dphi = 2.0 * math.pi / self.num_groups
-
-        # 1) V_k
-        Vk = per_group
-
-        # 2) Derivata angolare ∂phi V_k (differenze finite circolari)
         dV_dphi = np.zeros_like(Vk)
-        dV_dphi[1:-1] = (Vk[2:] - Vk[:-2]) / (2 * dphi)
-        dV_dphi[0] = (Vk[1] - Vk[-1]) / (2 * dphi)
-        dV_dphi[-1] = (Vk[0] - Vk[-2]) / (2 * dphi)
-
-        # 3) Termine dell’integrale della formula
+        if Vk.size >= 3:
+            dV_dphi[1:-1] = (Vk[2:] - Vk[:-2]) / (2 * dphi)
+            dV_dphi[0] = (Vk[1] - Vk[-1]) / (2 * dphi)
+            dV_dphi[-1] = (Vk[0] - Vk[-2]) / (2 * dphi)
+        else:
+            dV_dphi[:] = 0.0
+        
+        # integrand e integrali (uso Vk normalizzato)
         integrand = -Vk + self.alpha1 * (dV_dphi ** 2)
-
-        # 4) Integrale finale
-        accel_integral = float(
-            np.sum(dphi * np.cos(self.group_angles) * self.alpha0 * integrand)
-        )
+        accel_integral = float(np.sum(dphi * np.cos(self.group_angles) * self.alpha0 * integrand))
+        turn_integral  = float(dphi * np.sum(Vk * np.sin(self.group_angles)))
         
+        # --- SAFETY: limit dell'accelerazione per tick (evita esplosioni istantanee) ---
+        max_accel = float(self.spin_model_params.get("max_accel_per_tick", 0.5))  # scala consigliata 0.05..0.5
+        # compute raw dv then clamp
+        raw_dv = self.gamma * (self.v0 - self._v) + accel_integral
+        dv = float(np.clip(raw_dv, -abs(max_accel), abs(max_accel)))
         
-        
-        #dphi = 2.0 * math.pi / self.num_groups
-        #accel_integral = float(dphi * np.sum(per_group * np.cos(self.group_angles)))
-        turn_integral  = float(dphi * np.sum(per_group * np.sin(self.group_angles)))
-
-        # debug: show params/state just before dv
-        print("DEBUG_PARAMS:",
-            "gamma=", getattr(self, "gamma", None),
-            "alpha0=", getattr(self, "alpha0", None),
-            "v0=", getattr(self, "v0", None),
-            "dt=", getattr(self, "dt", None),
-            "agent.max_abs_vel=", getattr(self.agent, "max_absolute_velocity", None),
-            "current_v=", self._v,
-            "perception_max=", np.max(per_group),
-            "perception_mean=", np.mean(per_group),
-            "accel_integral=", accel_integral)
+        # Debug utile: mostra raw vs normalizzato
+        print("DBG_PERCEPT:",
+              "raw_mean=", raw_mean,
+              "raw_max=", raw_max,
+              "safe_max=", safe_max,
+              "mean_norm=", float(np.mean(Vk)),
+              "Vk_min,max=", float(np.min(Vk)), float(np.max(Vk)),
+              "accel_integral(raw)=", float(np.sum(dphi * np.cos(self.group_angles) * self.alpha0 * (-per_group + self.alpha1 * ((np.gradient(per_group, dphi))**2)) )) if per_group.size else 0.0,
+              "accel_integral(norm)=", accel_integral,
+              "raw_dv=", raw_dv,
+              "dv_clamped=", dv)
 
         # ---- Euler update for v (Eq.3 approx) ----
         # dv/dt = gamma * (v0 - v) + accel_integral
@@ -234,8 +253,14 @@ class SpinMovementModelB(MovementModel):
 
         # write outputs to agent (agent expects degrees for angular_velocity_cmd in the old code)
         # angular velocity command: use dpsi/dt converted into degrees and clamped by agent limits
+        
         ang_vel_deg = normalize_angle(math.degrees(dpsi))
         ang_vel_deg = max(min(ang_vel_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
+
+        print("ANGULAR VELOCITY:",ang_vel_deg)
+        print("per_group =", per_group)
+        print("group_angles =", self.group_angles)
+        print("turn_integral =", turn_integral)
 
         # linear velocity command is the current _v
         #self.agent.linear_velocity_cmd = float(self._v)
@@ -243,7 +268,8 @@ class SpinMovementModelB(MovementModel):
         #    self.agent.linear_velocity_cmd = -float(self._v)
         #    self.agent.angular_velocity_cmd = float(ang_vel_deg+180)
         #else:
-        
+        print("MAX ANG VEL =", self.agent.max_angular_velocity)
+
         self.agent.linear_velocity_cmd = float(self._v)
         self.agent.angular_velocity_cmd = float(ang_vel_deg)   
 
