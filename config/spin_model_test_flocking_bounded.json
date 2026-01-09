@@ -1,7 +1,7 @@
 {
     "environment":{
         "collisions": true,
-        "ticks_per_second": 10,
+        "ticks_per_second": 1,
         "time_limit": 0,
         "num_runs": 1,
         "results":{
@@ -14,7 +14,7 @@
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
-                "diameter": 0.8,
+                "diameter": 1.0,
                 "_id": "circle",
                 "color": "gray"
             }
@@ -24,7 +24,7 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 1,
+                "ticks_per_second": 10,
                 "number": [4],
                 "shape": "cylinder",
                 "max_absolute_velocity": 5.0,
@@ -34,7 +34,7 @@
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": 0.2,
+                    "range": 1.0,
                     "acquisition_per_second": 1
                 },
                 "moving_behavior":"spin_model_B",
@@ -42,7 +42,7 @@
                     "v0":0.01,
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
-                    "num_groups": 16,
+                    "num_groups": 32,
                     "num_spins_per_group": 8,
                     "perception_global_inhibition": 0,
                     "T": 0.3,

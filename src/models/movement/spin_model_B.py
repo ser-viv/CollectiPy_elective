@@ -139,7 +139,7 @@ class SpinMovementModelB(MovementModel):
         self._update_perception(objects, agents, tick, arena_shape)
 
         
-        if self.perception is None or not np.any(self.perception > 0):
+        if self.perception is None or np.allclose(self.perception, 0.0):
             self._run_fallback(tick, arena_shape, objects, agents)
             return
         print("PERCEPTION MEAN =", np.mean(self.perception))
@@ -149,6 +149,9 @@ class SpinMovementModelB(MovementModel):
 
         # read bump angle from the ring (still useful)
         bump_angle = self.spin_system.average_direction_of_activity()  # radians or None
+        if bump_angle is not None:
+            psi_error = (bump_angle - self._psi + math.pi) % (2*math.pi) - math.pi
+            self._psi += self.dt * self.beta0 * psi_error
 
         # ---- compute approximations of the integrals from discrete perception ----
         # perception may be flattened length G*N; aggregate per group
@@ -177,7 +180,7 @@ class SpinMovementModelB(MovementModel):
         # se preferisci normalizzare rispetto alla portata fisica:
         # safe_max = max(raw_max, float(self.perception_range) if np.isfinite(self.perception_range) else 1.0)
         
-        Vk = per_group / (safe_max + eps)
+        Vk = per_group - np.mean(per_group)
         
         # Clip su [0,1] per sicurezza
         Vk = np.clip(Vk, 0.0, 1.0)
@@ -203,7 +206,7 @@ class SpinMovementModelB(MovementModel):
         # integrand e integrali (uso Vk normalizzato)
         integrand = -Vk + self.alpha1 * (dV_dphi ** 2)
         accel_integral = float(np.sum(dphi * np.cos(self.group_angles) * self.alpha0 * integrand))
-        turn_integral  = float(dphi * np.sum(Vk * np.sin(self.group_angles)))
+        turn_integral  = float(dphi * np.sum(self.beta0 * dV_dphi * np.sin(self.group_angles)))
         
         # --- SAFETY: limit dell'accelerazione per tick (evita esplosioni istantanee) ---
         max_accel = float(self.spin_model_params.get("max_accel_per_tick", 0.5))  # scala consigliata 0.05..0.5
@@ -225,7 +228,7 @@ class SpinMovementModelB(MovementModel):
 
         # ---- Euler update for v (Eq.3 approx) ----
         # dv/dt = gamma * (v0 - v) + accel_integral
-        dv = self.gamma * (self.v0 - self._v) + accel_integral
+        # dv = self.gamma * (self.v0 - self._v) + accel_integral
         
         self._v += self.dt * dv
         

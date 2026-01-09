@@ -53,6 +53,25 @@ class VisualDetectionModel(DetectionModel):
             agents:   num_groups*num_spins_per_group
             combined: somma dei due
         """
+        '''print(
+        "[VISUAL DEBUG] sense() agents_keys=%s objects_keys=%s",
+        list(agents.keys()) if isinstance(agents, dict) else type(agents),
+        list(objects.keys()) if isinstance(objects, dict) else type(objects),
+        )
+        for k, v in agents.items():
+            print(
+                "[VISUAL DEBUG] agents[%s] contains %d shapes",
+                k, len(v)
+            )
+        for k, v in objects.items():
+            shapes = v[0] if isinstance(v, tuple) else v
+            print(
+                "[VISUAL DEBUG] objects[%s] contains %d shapes",
+                k, len(shapes)
+            )
+            '''
+        
+
         channel_size = self.num_groups * self.num_spins_per_group
 
         agent_channel = np.zeros(channel_size)
@@ -65,7 +84,7 @@ class VisualDetectionModel(DetectionModel):
         self._collect_agent_targets(agent_channel, agents, hierarchy)
 
         # raccoglie oggetti → occlusione angolare
-        #self._collect_object_targets(object_channel, objects)
+        self._collect_object_targets(object_channel, objects)
 
         # global inhibition come nel GPS
         self._apply_global_inhibition(agent_channel)
@@ -74,7 +93,12 @@ class VisualDetectionModel(DetectionModel):
         object_channel[:] = 0.0
 
         combined = agent_channel + object_channel
-
+        '''
+        print("[VISUAL DEBUG] perception min=%.3f max=%.3f mean=%.3f",
+        combined.min(),
+        combined.max(),
+        combined.mean())
+        '''
         return {
             "objects": object_channel,
             "agents": agent_channel,
@@ -107,10 +131,29 @@ class VisualDetectionModel(DetectionModel):
                 dz = agent_pos.z - self.agent.position.z
 
                 radius = getattr(shape, "bounding_radius", 0.15)
+
+                distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+                if distance > self.max_detection_distance:
+                    return
+
+                # angolo relativo
+                angle = math.degrees(math.atan2(-dy, dx))
+
+                angle = normalize_angle(angle)  # ritorna in [-180,180]
+
+                angle_rad = math.radians(angle)
+
+                # subtended angle
+                half_subt = math.atan(radius / max(distance, 1e-6))
+
+                obj_min = angle_rad - half_subt
+                obj_max = angle_rad + half_subt
                 
                 # diverso da gps
-                self._accumulate_occlusion(perception, dx, dy, dz, radius, strength=5.0)
-
+                # print("[VISUAL DEBUG] target_name=%s radius=%.3f pos=(%.2f, %.2f, %.2f)",target_name,radius,dx, dy, dz)
+                #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength=5.0)
+                self._accumulate_edges(perception, obj_min, +1.0)
+                self._accumulate_edges(perception, obj_max, -1.0)
     # =====================================================================
     # RACCOLTA OGGETTI
     # =====================================================================
@@ -125,7 +168,26 @@ class VisualDetectionModel(DetectionModel):
                 radius = getattr(shapes[i], "bounding_radius", 0.2)
                 strength = strengths[i]
 
-                self._accumulate_occlusion(perception, dx, dy, dz, radius, strength)
+                distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+                if distance > self.max_detection_distance:
+                    return
+
+                # angolo relativo
+                angle = math.degrees(math.atan2(-dy, dx))
+
+                angle = normalize_angle(angle)  # ritorna in [-180,180]
+
+                angle_rad = math.radians(angle)
+
+                # subtended angle
+                half_subt = math.atan(radius / max(distance, 1e-6))
+
+                obj_min = angle_rad - half_subt
+                obj_max = angle_rad + half_subt
+
+                #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength)
+                self._accumulate_edges(perception, obj_min, +1.0)
+                self._accumulate_edges(perception, obj_max, -1.0)
 
     # =====================================================================
     # GLOBAL INHIBITION
@@ -138,7 +200,20 @@ class VisualDetectionModel(DetectionModel):
     # =====================================================================
     # ACCUMULO BASATO SU OCCLUSIONE ANGOLARE (subtended angle)
     # =====================================================================
-    def _accumulate_occlusion(self, perception, dx, dy, dz, radius, strength):
+    
+    def _accumulate_edges(self, perception, edge_angle, sign):
+        
+        for g, center in enumerate(self.group_angles):
+            sec_min = center - self.perception_width / 2
+            sec_max = center + self.perception_width / 2
+
+            if sec_min <= edge_angle <= sec_max:
+                start = g * self.num_spins_per_group
+                end = start + self.num_spins_per_group
+                perception[start:end] += sign
+    
+    
+    '''def _accumulate_occlusion(self, perception, dx, dy, dz, radius, strength):
         distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
         if distance > self.max_detection_distance:
             return
@@ -167,10 +242,11 @@ class VisualDetectionModel(DetectionModel):
             # normalizzazione interna
             frac = (inter / self.perception_width) * strength
 
+
             # replica per spin interno al gruppo
             start = g * self.num_spins_per_group
             end = start + self.num_spins_per_group
-            perception[start:end] += frac
+            perception[start:end] += frac'''
 
     # =====================================================================
     # UTILS
