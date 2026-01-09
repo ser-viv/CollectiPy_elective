@@ -1,7 +1,7 @@
 {
     "environment":{
         "collisions": true,
-        "ticks_per_second": 1,
+        "ticks_per_second": 10,
         "time_limit": 0,
         "num_runs": 1,
         "results":{
