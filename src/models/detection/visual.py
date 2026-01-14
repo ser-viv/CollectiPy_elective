@@ -152,8 +152,12 @@ class VisualDetectionModel(DetectionModel):
                 # diverso da gps
                 # print("[VISUAL DEBUG] target_name=%s radius=%.3f pos=(%.2f, %.2f, %.2f)",target_name,radius,dx, dy, dz)
                 #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength=5.0)
-                self._accumulate_edges(perception, obj_min, +1.0)
-                self._accumulate_edges(perception, obj_max, -1.0)
+                self._accumulate_occlusion_interval(
+                    perception,
+                    obj_min,
+                    obj_max,
+                    strength=1.0
+                )
     # =====================================================================
     # RACCOLTA OGGETTI
     # =====================================================================
@@ -186,8 +190,12 @@ class VisualDetectionModel(DetectionModel):
                 obj_max = angle_rad + half_subt
 
                 #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength)
-                self._accumulate_edges(perception, obj_min, +1.0)
-                self._accumulate_edges(perception, obj_max, -1.0)
+                self._accumulate_occlusion_interval(
+                    perception,
+                    obj_min,
+                    obj_max,
+                    strength=1.0
+                )
 
     # =====================================================================
     # GLOBAL INHIBITION
@@ -200,18 +208,35 @@ class VisualDetectionModel(DetectionModel):
     # =====================================================================
     # ACCUMULO BASATO SU OCCLUSIONE ANGOLARE (subtended angle)
     # =====================================================================
+    def _accumulate_occlusion_interval(self, perception, obj_min, obj_max, strength=1.0):
+        """
+        Accumula un visual field binario V(φ):
+        tutti i settori del ring che intersecano l'intervallo angolare
+        [obj_min, obj_max] ricevono un contributo costante.
+        """
     
-    def _accumulate_edges(self, perception, edge_angle, sign):
-        
+        TWO_PI = 2.0 * math.pi
+    
+        # normalizzazione in [0, 2π)
+        obj_min = obj_min % TWO_PI
+        obj_max = obj_max % TWO_PI
+    
         for g, center in enumerate(self.group_angles):
-            sec_min = center - self.perception_width / 2
-            sec_max = center + self.perception_width / 2
-
-            if sec_min <= edge_angle <= sec_max:
+        
+            sec_min = (center - self.perception_width / 2) % TWO_PI
+            sec_max = (center + self.perception_width / 2) % TWO_PI
+    
+            # verifica intersezione tra due intervalli circolari
+            if obj_min <= obj_max:
+                obj_intersects = not (sec_max < obj_min or sec_min > obj_max)
+            else:
+                # intervallo oggetto attraversa 2π
+                obj_intersects = (sec_min <= obj_max) or (sec_max >= obj_min)
+    
+            if obj_intersects:
                 start = g * self.num_spins_per_group
                 end = start + self.num_spins_per_group
-                perception[start:end] += sign
-    
+                perception[start:end] += strength
     
     '''def _accumulate_occlusion(self, perception, dx, dy, dz, radius, strength):
         distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)

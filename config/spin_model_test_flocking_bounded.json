@@ -1,7 +1,7 @@
 {
     "environment":{
         "collisions": true,
-        "ticks_per_second": 1,
+        "ticks_per_second": 10,
         "time_limit": 0,
         "num_runs": 1,
         "results":{
@@ -24,8 +24,8 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 10,
-                "number": [4],
+                "ticks_per_second": 1,
+                "number": [3],
                 "shape": "cylinder",
                 "max_absolute_velocity": 5.0,
                 "angular_velocity": 10.0,
@@ -42,7 +42,7 @@
                     "v0":0.01,
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
-                    "num_groups": 32,
+                    "num_groups": 40,
                     "num_spins_per_group": 8,
                     "perception_global_inhibition": 0,
                     "T": 0.3,
@@ -53,9 +53,9 @@
                     "reference": "allocentric",
                     "dynamics": "metropolis",
                     "task": "flocking",
-                    "alpha0": 0.5,
+                    "alpha0": 1.0,
                     "alpha1": 0.5,
-                    "beta0": 5.0,
+                    "beta0": 1.0,
                     "beta1": 0.5
                 }
             }
