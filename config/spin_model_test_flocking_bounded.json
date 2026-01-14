@@ -28,18 +28,18 @@
                 "number": [3],
                 "shape": "cylinder",
                 "max_absolute_velocity": 5.0,
-                "angular_velocity": 10.0,
+                "angular_velocity": 20.0,
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
                     "range": 1.0,
-                    "acquisition_per_second": 1
+                    "acquisition_per_second": 5
                 },
                 "moving_behavior":"spin_model_B",
                 "spin_model":{
-                    "v0":0.01,
+                    "v0":0.02,
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
                     "num_groups": 40,
@@ -54,9 +54,9 @@
                     "dynamics": "metropolis",
                     "task": "flocking",
                     "alpha0": 1.0,
-                    "alpha1": 0.5,
-                    "beta0": 1.0,
-                    "beta1": 0.5
+                    "alpha1": 5.0,
+                    "beta0": 0.5,
+                    "beta1": 5.0
                 }
             }
         }   

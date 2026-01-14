@@ -180,11 +180,19 @@ class SpinMovementModelB(MovementModel):
         # se preferisci normalizzare rispetto alla portata fisica:
         # safe_max = max(raw_max, float(self.perception_range) if np.isfinite(self.perception_range) else 1.0)
         
-        Vk = per_group - np.mean(per_group)
+        V = per_group.copy()
+        V = np.clip(V, 0.0, None)   # visual field binario / somma oggetti
         
-        # Clip su [0,1] per sicurezza
-        Vk = np.clip(Vk, 0.0, 1.0)
-        
+        dphi = 2.0 * math.pi / self.num_groups
+
+        # derivata spaziale
+        dV_dphi = np.zeros_like(V)
+        dV_dphi[1:-1] = (V[2:] - V[:-2]) / (2 * dphi)
+        dV_dphi[0] = (V[1] - V[-1]) / (2 * dphi)
+        dV_dphi[-1] = (V[0] - V[-2]) / (2 * dphi)
+
+
+        Vk = V.copy()    # visual field binario
         # OPTIONAL: smoothing esponenziale (component-wise) per evitare scatti tick-to-tick
         ema_alpha = float(self.spin_model_params.get("perception_ema_alpha", 0.25))
         if not hasattr(self, "_vk_ema") or self._vk_ema is None:
@@ -194,7 +202,7 @@ class SpinMovementModelB(MovementModel):
         Vk = self._vk_ema.copy()
         
         # --- derivative (dV/dphi) su Vk normalizzato ---
-        dphi = 2.0 * math.pi / self.num_groups
+        
         dV_dphi = np.zeros_like(Vk)
         if Vk.size >= 3:
             dV_dphi[1:-1] = (Vk[2:] - Vk[:-2]) / (2 * dphi)
@@ -204,9 +212,11 @@ class SpinMovementModelB(MovementModel):
             dV_dphi[:] = 0.0
         
         # integrand e integrali (uso Vk normalizzato)
-        integrand = -Vk + self.alpha1 * (dV_dphi ** 2)
-        accel_integral = float(np.sum(dphi * np.cos(self.group_angles) * self.alpha0 * integrand))
-        turn_integral  = float(dphi * np.sum(self.beta0 * dV_dphi * np.sin(self.group_angles)))
+        
+        integrand = -V + self.alpha1 * (dV_dphi ** 2)
+
+        accel_integral = self.alpha0 * dphi * np.sum(np.cos(self.group_angles) * (-Vk + self.alpha1 * dV_dphi**2))
+        turn_integral = self.beta0 * dphi * np.sum(np.sin(self.group_angles) * (-Vk + self.beta1 * dV_dphi**2))
         
         # --- SAFETY: limit dell'accelerazione per tick (evita esplosioni istantanee) ---
         max_accel = float(self.spin_model_params.get("max_accel_per_tick", 0.5))  # scala consigliata 0.05..0.5
