@@ -171,9 +171,9 @@ class SpinMovementModelB(MovementModel):
         # crea un array grande quanto Visual field e applica le differenze finite centrali
         dV_dphi = np.zeros_like(V)
         edges = np.abs(np.roll(V, -1) - V) # 1 dove c'è un salto, 0 altrove
+        dV_dphi = edges/ ((dphi))
 
-        
-        dV_dphi = edges/ ((dphi**2)*self.num_groups)
+
         print("dV_dphi")
         print(dV_dphi)
 
@@ -206,7 +206,7 @@ class SpinMovementModelB(MovementModel):
         print(dv)
 
         self._v += dv * self.dt
-        self._v = np.clip(self._v, 0.0, self.v0*3 )
+        self._v = np.clip(self._v, 0.005, self.agent.max_absolute_velocity )
 
         print("self._v!")
         print(self._v)
@@ -223,7 +223,7 @@ class SpinMovementModelB(MovementModel):
         print("dpsi!")
         print(dpsi)
         # Convertiamo in gradi per il simulatore CollectiPy
-        turn_velocity_deg = (dpsi)
+        turn_velocity_deg = math.degrees(dpsi)
 
         print("turn_velocity_deg")
         print(turn_velocity_deg)
