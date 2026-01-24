@@ -92,7 +92,9 @@ class VisualDetectionModel(DetectionModel):
 
         object_channel[:] = 0.0
 
-        combined = agent_channel + object_channel
+        combined = np.maximum(agent_channel, object_channel)
+        combined = np.clip(combined, 0.0, 1.0)
+
         '''
         print("[VISUAL DEBUG] perception min=%.3f max=%.3f mean=%.3f",
         combined.min(),
@@ -236,42 +238,9 @@ class VisualDetectionModel(DetectionModel):
             if obj_intersects:
                 start = g * self.num_spins_per_group
                 end = start + self.num_spins_per_group
-                perception[start:end] += strength
+                perception[start:end] = 1.0
     
-    '''def _accumulate_occlusion(self, perception, dx, dy, dz, radius, strength):
-        distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
-        if distance > self.max_detection_distance:
-            return
-
-        # angolo relativo
-        angle = math.degrees(math.atan2(-dy, dx))
- 
-        angle = normalize_angle(angle)  # ritorna in [-180,180]
-
-        angle_rad = math.radians(angle)
-
-        # subtended angle
-        half_subt = math.atan(radius / max(distance, 1e-6))
-
-        obj_min = angle_rad - half_subt
-        obj_max = angle_rad + half_subt
-
-        for g, center in enumerate(self.group_angles):
-            sec_min = center - self.perception_width/2
-            sec_max = center + self.perception_width/2
-
-            inter = self._interval_intersection(obj_min, obj_max, sec_min, sec_max)
-            if inter <= 0:
-                continue
-
-            # normalizzazione interna
-            frac = (inter / self.perception_width) * strength
-
-
-            # replica per spin interno al gruppo
-            start = g * self.num_spins_per_group
-            end = start + self.num_spins_per_group
-            perception[start:end] += frac'''
+    
 
     # =====================================================================
     # UTILS

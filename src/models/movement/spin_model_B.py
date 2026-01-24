@@ -56,12 +56,12 @@ class SpinMovementModelB(MovementModel):
 
         # --- parameters coming from the paper / defaults ---
         self.gamma = float(self.spin_model_params.get("gamma", 1.0))         # relaxation for speed
-        self.v0 = float(self.spin_model_params.get("v0", 1.0))  # preferred speed REMOVED  getattr(self.agent, "max_absolute_velocity",
+        self.v0 = float(self.spin_model_params.get("v0", 0.2))  # preferred speed REMOVED  getattr(self.agent, "max_absolute_velocity",
         self.alpha0 = float(self.spin_model_params.get("alpha0", 1.0))      # coeff for acceleration integral
         self.beta0 = float(self.spin_model_params.get("beta0", 1.0))        # coeff for turning integral
         self.alpha1 = float(self.spin_model_params.get("alpha1", 1.0))      # coeff for acceleration integral
         self.beta1 = float(self.spin_model_params.get("beta1", 1.0))        # coeff for turning integral
-        self.dt = float(self.spin_model_params.get("dt", 1.0))              # discrete timestep for Euler update (per tick)
+        self.dt = float(self.spin_model_params.get("dt", 0.1))              # discrete timestep for Euler update (per tick)
         self.angular_noise_std = float(self.spin_model_params.get("angular_noise_std", 0.05))  # optional noise (rad)
         # ----------------------------------------------------
 
@@ -161,107 +161,86 @@ class SpinMovementModelB(MovementModel):
             psi_error = (bump_angle - self._psi)% (2 * math.pi) - math.pi #differenza angolare minima normalizzato
             self._psi += self.dt * self.beta0 * psi_error # angolo corrente
         
-        #---abbiamo angolo ring attractor---
-        
-        #V = np.clip(V, 0.0, None)   # visual field binario / somma oggetti
+
         
         dphi = 2.0 * math.pi / self.num_groups
 
+        print("dphi")
+        print(dphi)
+
         # crea un array grande quanto Visual field e applica le differenze finite centrali
         dV_dphi = np.zeros_like(V)
-        dV_dphi[1:-1] = (V[2:] - V[:-2]) / (2 * dphi)
-        dV_dphi[0] = (V[1] - V[-1]) / (2 * dphi)
-        dV_dphi[-1] = (V[0] - V[-2]) / (2 * dphi)
+        edges = np.abs(np.roll(V, -1) - V) # 1 dove c'è un salto, 0 altrove
+
+        
+        dV_dphi = edges/ ((dphi**2)*self.num_groups)
+        print("dV_dphi")
+        print(dV_dphi)
 
 
-
-        #---QUESTA SEZIONE SERVE PER DEFINIRE VK PER AGGIUGNERE SMOOTHING ESPONENZIALE, MODIFICA DI CONSEGUENZA V CON VK ------
-        #Vk = V.copy()    # visual field binario copia
-        # OPTIONAL: smoothing esponenziale (component-wise) per evitare scatti tick-to-tick
-        #ema_alpha = 1.0
-        #if not hasattr(self, "_vk_ema") or self._vk_ema is None:
-        #    self._vk_ema = Vk.copy()
-        #else:
-        #    self._vk_ema = ema_alpha * Vk + (1.0 - ema_alpha) * self._vk_ema
-        #Vk = self._vk_ema.copy()
-
-        # non è scritto bene ma memorizza l'external field
-        #self.spin_system.update_external_field(Vk)
         self.spin_system.run_spins(steps=1)
         
-        # --- derivative (dV/dphi) su Vk normalizzato ---
+        integrand = -V + self.alpha1 * (dV_dphi)
+
+        print("integrand")
+        print(integrand)
+
+        print("V!")
+        print(V)
+        print("dv_dphi!")
+        print(dV_dphi)
+
+        accel_integral = np.sum(np.cos(self.group_angles) * integrand) * dphi
+        print("accel integral!")
+        print(accel_integral)
         
-        #dV_dphi = np.zeros_like(Vk)
-        #if Vk.size >= 3:
-        #    dV_dphi[1:-1] = (Vk[2:] - Vk[:-2]) / (2 * dphi)
-        #    dV_dphi[0] = (Vk[1] - Vk[-1]) / (2 * dphi)
-        #    dV_dphi[-1] = (Vk[0] - Vk[-2]) / (2 * dphi)
-        #else:
-        #    dV_dphi[:] = 0.0
+        print("self.v0 - self._v!")
+        print(self.v0 - self._v)
+        print("self._v!")
+        print(self._v)
+
+
+        dv = self.gamma * (self.v0 - self._v) + self.alpha0 * accel_integral
         
-        # integrand e integrali (uso Vk normalizzato)
-        
-        integrand = -V + self.alpha1 * (dV_dphi ** 2)
+        print("dv!")
+        print(dv)
 
-        accel_integral = self.alpha0 * dphi * np.sum(np.cos(self.group_angles) * (-V + self.alpha1 * dV_dphi**2))
-        turn_integral = self.beta0 * dphi * np.sum(np.sin(self.group_angles) * (-V + self.beta1 * dV_dphi**2))
-        
-        # --- SAFETY: limit dell'accelerazione per tick (evita esplosioni istantanee) ---
-        #max_accel = float(self.spin_model_params.get("max_accel_per_tick", 0.5))  # scala consigliata 0.05..0.5
-        # compute raw dv then clamp
-        #raw_dv = self.gamma * (self.v0 - self._v) + accel_integral
-        #dv = float(np.clip(raw_dv, -abs(max_accel), abs(max_accel)))
-        
-        dv = self.gamma * (self.v0 - self._v) + accel_integral
+        self._v += dv * self.dt
+        self._v = np.clip(self._v, 0.0, self.v0*3 )
 
-        # Debug utile: mostra raw vs normalizzato
+        print("self._v!")
+        print(self._v)
 
-        # ---- Euler update for v (Eq.3 approx) ----
-        # dv/dt = gamma * (v0 - v) + accel_integral
-        # dv = self.gamma * (self.v0 - self._v) + accel_integral
-        
-        self._v += self.dt * dv
-        
-        print("v_pre_clip=", self._v)
+        turn_term = -V + self.beta1 * (dV_dphi)
+        turn_integral = np.sum(np.sin(self.group_angles) * turn_term)*dphi
 
-        # clip speed to [0, v0] as safety (paper assumes speed relaxes to v0)
-        self._v = float(np.clip(self._v, -self.v0, max(self.v0, getattr(self.agent, "max_absolute_velocity", self.v0))))
+        print("turn_integral!")
+        print(turn_integral)
 
-        print("DEBUG_AFTER:",
-            "v_post_clip=", self._v,
-            "dv_applied=", dv * self.dt if self.dt is not None else None)
-        # ---- Euler update for heading psi (Eq.4 approx) ----
-        # dpsi/dt = beta0 * turn_integral   (+ optional noise)
-        #dpsi = self.beta0 * turn_integral
-        #if self.angular_noise_std and self.angular_noise_std > 0.0:
-        #    dpsi += float(self.agent.random_generator.normalvariate(0.0, self.angular_noise_std))
-        #self._psi += self.dt * dpsi
+        dpsi = self.beta0 * turn_integral
 
-        # Optionally, prefer to use ring bump as heading target (comment/uncomment as needed)
-        # if bump_angle is not None:
-        #     # direct coupling toward bump: proportional correction
-        #     psi_error = (bump_angle - self._psi + math.pi) % (2*math.pi) - math.pi
-        #     k_psi = float(self.spin_model_params.get("k_psi", 1.0))
-        #     self._psi += self.dt * k_psi * psi_error
 
-        # write outputs to agent (agent expects degrees for angular_velocity_cmd in the old code)
-        # angular velocity command: use dpsi/dt converted into degrees and clamped by agent limits
-        
-        #ang_vel_deg = normalize_angle(math.degrees(dpsi))
-        #ang_vel_deg = max(min(ang_vel_deg, self.agent.max_angular_velocity), -self.agent.max_angular_velocity)
+        print("dpsi!")
+        print(dpsi)
+        # Convertiamo in gradi per il simulatore CollectiPy
+        turn_velocity_deg = (dpsi)
 
-        # linear velocity command is the current _v
-        #self.agent.linear_velocity_cmd = float(self._v)
-        #if self._v<0:
-        #    self.agent.linear_velocity_cmd = -float(self._v)
-        #    self.agent.angular_velocity_cmd = float(ang_vel_deg+180)
-        #else:
+        print("turn_velocity_deg")
+        print(turn_velocity_deg)
 
-        self.agent.linear_velocity_cmd = float(self._v)
-        # !!!! self.agent.angular_velocity_cmd = float(ang_vel_deg)   
+        self.spin_system.update_external_field(V)
+        #self.spin_system.run_spins(steps=5)
 
         
-        # self.agent.linear_velocity_cmd = max(0.0, self.agent.linear_velocity_cmd)
+
+        print("angular_velocity_cmd")
+        print(np.clip(turn_velocity_deg, -self.agent.max_angular_velocity, self.agent.max_angular_velocity))
+
+        self.agent.linear_velocity_cmd = self._v
+        self.agent.angular_velocity_cmd = np.clip(turn_velocity_deg, -self.agent.max_angular_velocity, self.agent.max_angular_velocity)
+
+        if tick % 10 == 0:
+            print(f"[{agent.get_name()}] V_mean: {V.mean():.2f} | Vel: {self._v:.4f} | Turn: {turn_velocity_deg:.2f}")
         
 
         
@@ -275,8 +254,7 @@ class SpinMovementModelB(MovementModel):
                 dv,
                 accel_integral,
                 dpsi,
-                (bump_angle if bump_angle is not None else float("nan")),
-                ang_vel_deg,
+                (bump_angle if bump_angle is not None else float("nan"))
             )
 
     # --- perception helpers (copied logic from original model) ---
