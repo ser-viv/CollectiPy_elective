@@ -171,7 +171,7 @@ class VisualDetectionModel(DetectionModel):
                 dz = positions[i].z - self.agent.position.z
 
                 # diverso da gps
-                radius = getattr(shapes[i], "bounding_radius", 0.2)
+                radius = getattr(shapes[i], "bounding_radius", 0.025)
                 strength = strengths[i]
 
                 distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)

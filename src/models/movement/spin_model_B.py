@@ -152,7 +152,7 @@ class SpinMovementModelB(MovementModel):
         # edges = 1 dove c'è un salto di colore (bordo dell'oggetto)
         edges = np.abs(np.roll(V, -1) - V) 
         # Energia del bordo (dV/dphi del paper)
-        dV_energy = edges / dphi
+        dV_energy = edges / (dphi*0.5)
 
         # 4. Calcolo Integrali (Eq. 3 e 4)
         # alpha1 e beta1 pesano quanto sono attrattivi i bordi rispetto alla repulsione dell'area (-V)
@@ -169,13 +169,37 @@ class SpinMovementModelB(MovementModel):
         
         # LIMITI FISICI: Evita che l'agente 'salti' fuori dall'arena
         # Per un'arena di 1.0, la velocità non deve mai superare 0.05 - 0.1
-        self._v = np.clip(self._v, 0.0, 0.08) 
+        self._v = np.clip(self._v, 0.01, 0.06) 
 
         # 6. Dinamica Sterzata (Eq. 4)
         dpsi_rad_sec = self.beta0 * turn_integral
         # turn_velocity_deg è in gradi/tick. 
         # Dobbiamo convertire da radianti a gradi E moltiplicare per dt (0.1)
         turn_velocity_deg = math.degrees(dpsi_rad_sec) * self.dt
+
+
+        # Calcoliamo la distanza dal centro dell'arena (assumendo centro in 0,0)
+        arena_center = arena_shape.center 
+        dx_c = arena_center.x - self.agent.position.x
+        dy_c = arena_center.y - self.agent.position.y
+        dist_from_center = math.hypot(dx_c, dy_c)
+        
+        # Calcoliamo il raggio dell'arena dai suoi vertici
+        arena_radius = (arena_shape.max_vert().x - arena_shape.min_vert().x) / 2.0
+
+        if dist_from_center > (arena_radius * 0.75): # Inizia a girare al 75% del raggio
+            # Calcola l'angolo verso il centro
+            angle_to_center = math.degrees(math.atan2(dy_c, dx_c))
+            # Invertiamo il segno di dy_c se il simulatore ha Y invertita (CollectiPy la ha)
+            angle_to_center = math.degrees(math.atan2(-dy_c, dx_c))
+            
+            diff_angle = normalize_angle(angle_to_center - self.agent.orientation.z)
+            
+            # Forza la sterzata verso il centro (peso crescente man mano che ci si avvicina al bordo)
+            danger = (dist_from_center - arena_radius * 0.75) / (arena_radius * 0.25)
+            turn_velocity_deg = (turn_velocity_deg * (1 - danger)) + (diff_angle * danger)
+            self._v *= (1.0 - danger * 0.5) # Rallenta per curvare meglio
+
 
         # 7. Applicazione comandi
         self.agent.linear_velocity_cmd = self._v
