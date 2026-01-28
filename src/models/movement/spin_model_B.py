@@ -55,12 +55,12 @@ class SpinMovementModelB(MovementModel):
 
 
         # --- parameters coming from the paper / defaults ---
-        self.gamma = float(self.spin_model_params.get("gamma", 1.0))         # relaxation for speed
-        self.v0 = float(self.spin_model_params.get("v0", 0.2))  # preferred speed REMOVED  getattr(self.agent, "max_absolute_velocity",
-        self.alpha0 = float(self.spin_model_params.get("alpha0", 1.0))      # coeff for acceleration integral
-        self.beta0 = float(self.spin_model_params.get("beta0", 1.0))        # coeff for turning integral
-        self.alpha1 = float(self.spin_model_params.get("alpha1", 1.0))      # coeff for acceleration integral
-        self.beta1 = float(self.spin_model_params.get("beta1", 1.0))        # coeff for turning integral
+        self.gamma = float(self.spin_model_params.get("gamma", 0.5))         # relaxation for speed
+        self.v0 = float(self.spin_model_params.get("v0", 0.03))  # preferred speed REMOVED  getattr(self.agent, "max_absolute_velocity",
+        self.alpha0 = float(self.spin_model_params.get("alpha0", 0.01))      # coeff for acceleration integral
+        self.beta0 = float(self.spin_model_params.get("beta0", 0.01))        # coeff for turning integral
+        self.alpha1 = float(self.spin_model_params.get("alpha1", 0.5))      # coeff for acceleration integral
+        self.beta1 = float(self.spin_model_params.get("beta1", 0.5))        # coeff for turning integral
         self.dt = float(self.spin_model_params.get("dt", 0.1))              # discrete timestep for Euler update (per tick)
         self.angular_noise_std = float(self.spin_model_params.get("angular_noise_std", 0.05))  # optional noise (rad)
         # ----------------------------------------------------
@@ -171,7 +171,10 @@ class SpinMovementModelB(MovementModel):
         # crea un array grande quanto Visual field e applica le differenze finite centrali
         dV_dphi = np.zeros_like(V)
         edges = np.abs(np.roll(V, -1) - V) # 1 dove c'è un salto, 0 altrove
-        dV_dphi = edges/ ((dphi))
+        #dV_dphi = edges/((dphi))
+        dV_dphi = ((dphi))*self.dt
+        print("edges")
+        print(edges)
 
 
         print("dV_dphi")
@@ -198,6 +201,8 @@ class SpinMovementModelB(MovementModel):
         print(self.v0 - self._v)
         print("self._v!")
         print(self._v)
+        print("self.alpha0 * accel_integral")
+        print(self.alpha0 * accel_integral)
 
 
         dv = self.gamma * (self.v0 - self._v) + self.alpha0 * accel_integral
@@ -223,7 +228,7 @@ class SpinMovementModelB(MovementModel):
         print("dpsi!")
         print(dpsi)
         # Convertiamo in gradi per il simulatore CollectiPy
-        turn_velocity_deg = math.degrees(dpsi)
+        turn_velocity_deg = math.degrees(dpsi)*self.dt
 
         print("turn_velocity_deg")
         print(turn_velocity_deg)
