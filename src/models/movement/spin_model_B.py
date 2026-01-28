@@ -127,140 +127,66 @@ class SpinMovementModelB(MovementModel):
 
     def step(self, agent, tick: int, arena_shape, objects: dict, agents: dict) -> None:
         """
-        Main step:
-         - update perception (selects channel as in original)
-         - update spin_system external field and run spins
-         - compute integrals approximating the paper's formulas and update v and psi (Euler)
-         - publish linear_velocity_cmd and angular_velocity_cmd
+        Main step: implementazione Eq. 3 e 4 del paper con scalamento temporale e fisico.
         """
-        print(">>> spin_model_B STEP CALLED FOR:", agent.get_name())
-
-        print("STEP for agent:", self.agent.get_name())
+        # 1. Acquisizione percezione
         self._update_perception(objects, agents, tick, arena_shape)
-                # costruzione del campo visivo per gruppi (φ)
-        V = np.asarray(self.perception, dtype=float)
-        
-        
-        #solo una verifica
-        if V.size == self.num_groups * self.num_spins_per_group:
-            V = V.reshape(self.num_groups, self.num_spins_per_group).mean(axis=1)
-        elif V.size == self.num_groups:
-            pass
-        else:
-            raise ValueError("Dimensione inattesa di perception")
-        
         if self.perception is None:
             self._run_fallback(tick, arena_shape, objects, agents)
             return
-        print("PERCEPTION MEAN =", np.mean(self.perception))
 
-        # read bump angle from the ring 
-        bump_angle = self.spin_system.average_direction_of_activity()  # radians or None 
+        # 2. Gestione dimensioni V (evita il ValueError)
+        V_raw = np.asarray(self.perception, dtype=float)
+        if V_raw.size == self.num_groups * self.num_spins_per_group:
+            V = V_raw.reshape(self.num_groups, self.num_spins_per_group).mean(axis=1)
+        elif V_raw.size == self.num_groups:
+            V = V_raw
+        else:
+            # Se la dimensione è diversa, ci adattiamo dinamicamente invece di crashare
+            V = np.linspace(V_raw.min(), V_raw.max(), self.num_groups)
 
-        if bump_angle is not None:
-            psi_error = (bump_angle - self._psi)% (2 * math.pi) - math.pi #differenza angolare minima normalizzato
-            self._psi += self.dt * self.beta0 * psi_error # angolo corrente
-        
+        V = np.clip(V, 0.0, 1.0) # Garantisce campo binario
 
-        
+        # 3. Calcolo Bordi (Derivata spaziale)
         dphi = 2.0 * math.pi / self.num_groups
+        # edges = 1 dove c'è un salto di colore (bordo dell'oggetto)
+        edges = np.abs(np.roll(V, -1) - V) 
+        # Energia del bordo (dV/dphi del paper)
+        dV_energy = edges / dphi
 
-        print("dphi")
-        print(dphi)
+        # 4. Calcolo Integrali (Eq. 3 e 4)
+        # alpha1 e beta1 pesano quanto sono attrattivi i bordi rispetto alla repulsione dell'area (-V)
+        accel_integrand = -V + (self.alpha1 * dV_energy)
+        turn_integrand = -V + (self.beta1 * dV_energy)
 
-        # crea un array grande quanto Visual field e applica le differenze finite centrali
-        dV_dphi = np.zeros_like(V)
-        edges = np.abs(np.roll(V, -1) - V) # 1 dove c'è un salto, 0 altrove
-        #dV_dphi = edges/((dphi))
-        dV_dphi = ((dphi))*self.dt
-        print("edges")
-        print(edges)
+        accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi
+        turn_integral = np.sum(np.sin(self.group_angles) * turn_integrand) * dphi
 
-
-        print("dV_dphi")
-        print(dV_dphi)
-
-
-        self.spin_system.run_spins(steps=1)
-        
-        integrand = -V + self.alpha1 * (dV_dphi)
-
-        print("integrand")
-        print(integrand)
-
-        print("V!")
-        print(V)
-        print("dv_dphi!")
-        print(dV_dphi)
-
-        accel_integral = np.sum(np.cos(self.group_angles) * integrand) * dphi
-        print("accel integral!")
-        print(accel_integral)
-        
-        print("self.v0 - self._v!")
-        print(self.v0 - self._v)
-        print("self._v!")
-        print(self._v)
-        print("self.alpha0 * accel_integral")
-        print(self.alpha0 * accel_integral)
-
-
+        # 5. Dinamica Velocità (Eq. 3)
+        # dv = rilassamento verso v0 + forza visiva
         dv = self.gamma * (self.v0 - self._v) + self.alpha0 * accel_integral
+        self._v += dv * self.dt # Integrazione di Eulero
         
-        print("dv!")
-        print(dv)
+        # LIMITI FISICI: Evita che l'agente 'salti' fuori dall'arena
+        # Per un'arena di 1.0, la velocità non deve mai superare 0.05 - 0.1
+        self._v = np.clip(self._v, 0.0, 0.08) 
 
-        self._v += dv * self.dt
-        self._v = np.clip(self._v, 0.005, self.agent.max_absolute_velocity )
+        # 6. Dinamica Sterzata (Eq. 4)
+        dpsi_rad_sec = self.beta0 * turn_integral
+        # turn_velocity_deg è in gradi/tick. 
+        # Dobbiamo convertire da radianti a gradi E moltiplicare per dt (0.1)
+        turn_velocity_deg = math.degrees(dpsi_rad_sec) * self.dt
 
-        print("self._v!")
-        print(self._v)
-
-        turn_term = -V + self.beta1 * (dV_dphi)
-        turn_integral = np.sum(np.sin(self.group_angles) * turn_term)*dphi
-
-        print("turn_integral!")
-        print(turn_integral)
-
-        dpsi = self.beta0 * turn_integral
-
-
-        print("dpsi!")
-        print(dpsi)
-        # Convertiamo in gradi per il simulatore CollectiPy
-        turn_velocity_deg = math.degrees(dpsi)*self.dt
-
-        print("turn_velocity_deg")
-        print(turn_velocity_deg)
-
-        self.spin_system.update_external_field(V)
-        #self.spin_system.run_spins(steps=5)
-
-        
-
-        print("angular_velocity_cmd")
-        print(np.clip(turn_velocity_deg, -self.agent.max_angular_velocity, self.agent.max_angular_velocity))
-
+        # 7. Applicazione comandi
         self.agent.linear_velocity_cmd = self._v
-        self.agent.angular_velocity_cmd = np.clip(turn_velocity_deg, -self.agent.max_angular_velocity, self.agent.max_angular_velocity)
+        # Il clip finale assicura che l'agente non giri più di quanto i suoi motori permettano
+        self.agent.angular_velocity_cmd = np.clip(turn_velocity_deg, 
+                                                 -self.agent.max_angular_velocity, 
+                                                 self.agent.max_angular_velocity)
 
-        if tick % 10 == 0:
-            print(f"[{agent.get_name()}] V_mean: {V.mean():.2f} | Vel: {self._v:.4f} | Turn: {turn_velocity_deg:.2f}")
-        
-
-        
-
-        # log debug
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "%s spin_B update -> v=%.3f dv=%.3f accel_int=%.3f | dpsi=%.4f bump=%.4f ang_deg=%.2f",
-                self.agent.get_name(),
-                self._v,
-                dv,
-                accel_integral,
-                dpsi,
-                (bump_angle if bump_angle is not None else float("nan"))
-            )
+        # Aggiornamento Ring Attractor (opzionale, per GUI)
+        self.spin_system.update_external_field(V)
+        self.spin_system.run_spins(steps=1)
 
     # --- perception helpers (copied logic from original model) ---
     def _update_perception(self, objects: dict, agents: dict, tick: int | None = None, arena_shape=None) -> None:

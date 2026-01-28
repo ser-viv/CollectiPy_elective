@@ -24,11 +24,11 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 1,
+                "ticks_per_second": 10,
                 "number": [3],
                 "shape": "cylinder",
-                "max_absolute_velocity": 5.0,
-                "angular_velocity": 20.0,
+                "max_absolute_velocity": 0.1,
+                "angular_velocity": 40.0,
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
@@ -39,7 +39,7 @@
                 },
                 "moving_behavior":"spin_model_B",
                 "spin_model":{
-                    "v0":0.02,
+                    "v0":0.03,
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
                     "num_groups": 40,
@@ -53,10 +53,10 @@
                     "reference": "allocentric",
                     "dynamics": "metropolis",
                     "task": "flocking",
-                    "alpha0": 1.0,
-                    "alpha1": 5.0,
-                    "beta0": 0.5,
-                    "beta1": 5.0
+                    "alpha0": 0.01,
+                    "alpha1": 0.1,
+                    "beta0": 0.01,
+                    "beta1": 0.1
                 }
             }
         }   
