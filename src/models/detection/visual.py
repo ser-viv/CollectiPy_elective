@@ -132,7 +132,7 @@ class VisualDetectionModel(DetectionModel):
                 dy = agent_pos.y - self.agent.position.y
                 dz = agent_pos.z - self.agent.position.z
 
-                radius = getattr(shape, "bounding_radius", 0.15)
+                radius = getattr(shape, "bounding_radius", 0.025)
 
                 distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
                 if distance > self.max_detection_distance:

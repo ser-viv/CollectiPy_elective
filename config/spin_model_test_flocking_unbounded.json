@@ -1,7 +1,7 @@
 {
     "environment":{
         "collisions": false,
-        "ticks_per_second": 1,
+        "ticks_per_second": 10,
         "time_limit": 0,
         "num_runs": 1,
         "results":{
@@ -26,24 +26,25 @@
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 1,
-                "number": [3],
+                "ticks_per_second": 10,
+                "number": [20],
                 "shape": "cylinder",
+                "max_absolute_velocity": 0.1,
                 "linear_velocity": 0.01,
-                "angular_velocity": 10,
-                "height": 0.01,
-                "diameter": 0.01,
+                "angular_velocity": 60,
+                "height": 0.02,
+                "diameter": 0.05,
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": 3,
-                    "acquisition_per_second": 1
+                    "range": 5.0,
+                    "acquisition_per_second": 10
                 },
                 "moving_behavior":"spin_model_B",
                 "spin_model":{
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
-                    "num_groups": 16,
+                    "num_groups": 40,
                     "num_spins_per_group": 8,
                     "perception_global_inhibition": 0,
                     "T": 0.3,
@@ -55,11 +56,11 @@
                     "dynamics": "metropolis",
                     "task": "flocking",
                     "alpha0": 0.005,
-                    "alpha1": 0.05,
-                    "beta0": 0.005,
-                    "beta1": 0.05,
-                    "gamma": 0.1,
-                    "v0": 0.02
+                    "alpha1": 0.02,
+                    "beta0": 0.01,
+                    "beta1": 0.02,
+                    "gamma": 0.5,
+                    "v0": 0.03
                 }
             }
         }   

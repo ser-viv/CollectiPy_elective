@@ -14,27 +14,26 @@
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
-                "diameter": 1.5,
-                "_id": "circle",
+                "diameter": 4.0,
+                "_id": "rectangle",
                 "color": "gray"
             }
         },
         "objects":{
-
         },
         "agents":{
             "movable_0":{
                 "ticks_per_second": 10,
-                "number": [10],
+                "number": [15],
                 "shape": "cylinder",
                 "max_absolute_velocity": 0.1,
-                "angular_velocity": 40.0,
+                "angular_velocity": 60.0,
                 "height": 0.02,
                 "diameter": 0.05,
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": 2.0,
+                    "range": 3.0,
                     "acquisition_per_second": 10
                 },
                 "moving_behavior":"spin_model_B",
@@ -42,7 +41,7 @@
                     "v0":0.03,
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
-                    "num_groups": 40,
+                    "num_groups": 16,
                     "num_spins_per_group": 8,
                     "perception_global_inhibition": 0,
                     "T": 0.3,
@@ -53,10 +52,10 @@
                     "reference": "allocentric",
                     "dynamics": "metropolis",
                     "task": "flocking",
-                    "alpha0": 0.1,
-                    "alpha1": 10.0,
+                    "alpha0": 0.5,
+                    "alpha1": 20.0,
                     "beta0": 0.1,
-                    "beta1": 10.0,
+                    "beta1": 20.0,
                     "gamma": 0.5
                 }
             }

@@ -150,29 +150,51 @@ class SpinMovementModelB(MovementModel):
         # 3. Calcolo Bordi (Derivata spaziale)
         dphi = 2.0 * math.pi / self.num_groups
         # edges = 1 dove c'è un salto di colore (bordo dell'oggetto)
-        edges = np.abs(np.roll(V, -1) - V) 
+        edges = (np.roll(V, -1) + V + np.roll(V, 1)) / 3.0
         # Energia del bordo (dV/dphi del paper)
-        dV_energy = edges / (dphi*0.5)
+        dV_energy = edges / (dphi)
 
         # 4. Calcolo Integrali (Eq. 3 e 4)
         # alpha1 e beta1 pesano quanto sono attrattivi i bordi rispetto alla repulsione dell'area (-V)
         accel_integrand = -V + (self.alpha1 * dV_energy)
         turn_integrand = -V + (self.beta1 * dV_energy)
 
-        accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi
+        print("accel_integrand")
+        print(accel_integrand)
+        print("dphi")
+        print(dphi)
+        accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi #* self.dt
         turn_integral = np.sum(np.sin(self.group_angles) * turn_integrand) * dphi
+
+        print("accel_integral")
+        print(accel_integral)
+
+        turning_slowdown = 1.0 - (abs(turn_integral) * 0.2) # Rallenta fino al 20% se la sterzata è massima
+        self._v *= np.clip(turning_slowdown, 0.5, 1.0)
 
         # 5. Dinamica Velocità (Eq. 3)
         # dv = rilassamento verso v0 + forza visiva
-        dv = self.gamma * (self.v0 - self._v) + self.alpha0 * accel_integral
+
+        social_force_scale = 1.0 
+        
+        print("correction")
+        print(self.gamma * (self.v0 - self._v))
+        print("paper velocity correction")
+        print(self.alpha0 * accel_integral * social_force_scale)
+        dv = self.gamma * (self.v0 - self._v) + (self.alpha0 * accel_integral * social_force_scale)
+        #dv = self.gamma * (self.v0 - self._v) + self.alpha0 * accel_integral
         self._v += dv * self.dt # Integrazione di Eulero
+        print("self._v ")
+        print(self._v)
         
         # LIMITI FISICI: Evita che l'agente 'salti' fuori dall'arena
         # Per un'arena di 1.0, la velocità non deve mai superare 0.05 - 0.1
-        self._v = np.clip(self._v, 0.01, 0.06) 
+        self._v = np.clip(self._v, 0.001, 0.06) 
+        print("self._v AFTER CLIP")
+        print(self._v)
 
         # 6. Dinamica Sterzata (Eq. 4)
-        dpsi_rad_sec = self.beta0 * turn_integral
+        dpsi_rad_sec = self.beta0 * turn_integral*social_force_scale
         # turn_velocity_deg è in gradi/tick. 
         # Dobbiamo convertire da radianti a gradi E moltiplicare per dt (0.1)
         turn_velocity_deg = math.degrees(dpsi_rad_sec) * self.dt
@@ -196,7 +218,8 @@ class SpinMovementModelB(MovementModel):
             diff_angle = normalize_angle(angle_to_center - self.agent.orientation.z)
             
             # Forza la sterzata verso il centro (peso crescente man mano che ci si avvicina al bordo)
-            danger = (dist_from_center - arena_radius * 0.75) / (arena_radius * 0.25)
+            danger = (dist_from_center - arena_radius * 0.75) / (arena_radius * 0.25)**2
+            danger = np.clip(danger, 0, 1)
             turn_velocity_deg = (turn_velocity_deg * (1 - danger)) + (diff_angle * danger)
             self._v *= (1.0 - danger * 0.5) # Rallenta per curvare meglio
 
