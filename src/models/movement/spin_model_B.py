@@ -129,33 +129,32 @@ class SpinMovementModelB(MovementModel):
         """
         Main step: implementazione Eq. 3 e 4 del paper con scalamento temporale e fisico.
         """
-        # 1. Acquisizione percezione
+        
         self._update_perception(objects, agents, tick, arena_shape)
         if self.perception is None:
             self._run_fallback(tick, arena_shape, objects, agents)
             return
 
-        # 2. Gestione dimensioni V (evita il ValueError)
+        
         V_raw = np.asarray(self.perception, dtype=float)
         if V_raw.size == self.num_groups * self.num_spins_per_group:
             V = V_raw.reshape(self.num_groups, self.num_spins_per_group).mean(axis=1)
         elif V_raw.size == self.num_groups:
             V = V_raw
         else:
-            # Se la dimensione è diversa, ci adattiamo dinamicamente invece di crashare
+            
             V = np.linspace(V_raw.min(), V_raw.max(), self.num_groups)
 
-        V = np.clip(V, 0.0, 1.0) # Garantisce campo binario
+        V = np.clip(V, 0.0, 1.0) 
 
-        # 3. Calcolo Bordi (Derivata spaziale)
+       
         dphi = 2.0 * math.pi / self.num_groups
-        # edges = 1 dove c'è un salto di colore (bordo dell'oggetto)
+        
         edges = (np.roll(V, -1) + V + np.roll(V, 1)) / 3.0
-        # Energia del bordo (dV/dphi del paper)
+        
         dV_energy = edges / (dphi)
 
-        # 4. Calcolo Integrali (Eq. 3 e 4)
-        # alpha1 e beta1 pesano quanto sono attrattivi i bordi rispetto alla repulsione dell'area (-V)
+        # Calcolo Integrali
         accel_integrand = -V + (self.alpha1 * dV_energy)
         turn_integrand = -V + (self.beta1 * dV_energy)
 
@@ -163,17 +162,15 @@ class SpinMovementModelB(MovementModel):
         print(accel_integrand)
         print("dphi")
         print(dphi)
-        accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi #* self.dt
+        accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi 
         turn_integral = np.sum(np.sin(self.group_angles) * turn_integrand) * dphi
 
         print("accel_integral")
         print(accel_integral)
 
-        turning_slowdown = 1.0 - (abs(turn_integral) * 0.2) # Rallenta fino al 20% se la sterzata è massima
+        turning_slowdown = 1.0 - (abs(turn_integral) * 0.2) 
         self._v *= np.clip(turning_slowdown, 0.5, 1.0)
 
-        # 5. Dinamica Velocità (Eq. 3)
-        # dv = rilassamento verso v0 + forza visiva
 
         social_force_scale = 1.0 
         
@@ -187,16 +184,13 @@ class SpinMovementModelB(MovementModel):
         print("self._v ")
         print(self._v)
         
-        # LIMITI FISICI: Evita che l'agente 'salti' fuori dall'arena
-        # Per un'arena di 1.0, la velocità non deve mai superare 0.05 - 0.1
         self._v = np.clip(self._v, 0.001, 0.06) 
         print("self._v AFTER CLIP")
         print(self._v)
 
-        # 6. Dinamica Sterzata (Eq. 4)
+        
         dpsi_rad_sec = self.beta0 * turn_integral*social_force_scale
         # turn_velocity_deg è in gradi/tick. 
-        # Dobbiamo convertire da radianti a gradi E moltiplicare per dt (0.1)
         turn_velocity_deg = math.degrees(dpsi_rad_sec) * self.dt
 
 
@@ -224,14 +218,13 @@ class SpinMovementModelB(MovementModel):
             self._v *= (1.0 - danger * 0.5) # Rallenta per curvare meglio
 
 
-        # 7. Applicazione comandi
+        # Applicazione comandi
         self.agent.linear_velocity_cmd = self._v
-        # Il clip finale assicura che l'agente non giri più di quanto i suoi motori permettano
         self.agent.angular_velocity_cmd = np.clip(turn_velocity_deg, 
                                                  -self.agent.max_angular_velocity, 
                                                  self.agent.max_angular_velocity)
 
-        # Aggiornamento Ring Attractor (opzionale, per GUI)
+        
         self.spin_system.update_external_field(V)
         self.spin_system.run_spins(steps=1)
 
