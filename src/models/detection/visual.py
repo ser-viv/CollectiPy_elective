@@ -15,10 +15,6 @@ class VisualDetectionModel(DetectionModel):
         - agents
         - objects
         - combined
-
-    Differenza chiave:
-        al posto della gaussiana del GPS, usa l'occlusione angolare (subtended angle)
-        e la sua intersezione con ogni settore del ring.
     """
 
     def __init__(self, agent, context=None):
@@ -29,7 +25,7 @@ class VisualDetectionModel(DetectionModel):
         self.num_spins_per_group = context.get("num_spins_per_group", 1)
         self.perception_width = context.get("perception_width", 0.5)
 
-        # angoli dei gruppi (radianti) → come richiesto dal ring system
+        
         self.group_angles = context.get(
             "group_angles",
             np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False)
@@ -43,9 +39,6 @@ class VisualDetectionModel(DetectionModel):
                 getattr(self.agent, "perception_distance", math.inf))
         )
 
-    # =====================================================================
-    # SENSE (uguale interfaccia GPS)
-    # =====================================================================
     def sense(self, agent, objects: dict, agents: dict, arena_shape=None):
         """
         Restituisce un dict con:
@@ -53,23 +46,6 @@ class VisualDetectionModel(DetectionModel):
             agents:   num_groups*num_spins_per_group
             combined: somma dei due
         """
-        '''print(
-        "[VISUAL DEBUG] sense() agents_keys=%s objects_keys=%s",
-        list(agents.keys()) if isinstance(agents, dict) else type(agents),
-        list(objects.keys()) if isinstance(objects, dict) else type(objects),
-        )
-        for k, v in agents.items():
-            print(
-                "[VISUAL DEBUG] agents[%s] contains %d shapes",
-                k, len(v)
-            )
-        for k, v in objects.items():
-            shapes = v[0] if isinstance(v, tuple) else v
-            print(
-                "[VISUAL DEBUG] objects[%s] contains %d shapes",
-                k, len(shapes)
-            )
-            '''
         
 
         channel_size = self.num_groups * self.num_spins_per_group
@@ -77,16 +53,16 @@ class VisualDetectionModel(DetectionModel):
         agent_channel = np.zeros(channel_size)
         object_channel = np.zeros(channel_size)
 
-        # stessa gerarchia del GPS
+       
         hierarchy = self._resolve_hierarchy(agent, arena_shape)
 
-        # raccoglie agenti → occlusione angolare
+       
         self._collect_agent_targets(agent_channel, agents, hierarchy)
 
-        # raccoglie oggetti → occlusione angolare
+        
         self._collect_object_targets(object_channel, objects)
 
-        # global inhibition come nel GPS
+        
         self._apply_global_inhibition(agent_channel)
         self._apply_global_inhibition(object_channel)
 
@@ -95,28 +71,19 @@ class VisualDetectionModel(DetectionModel):
         combined = np.maximum(agent_channel, object_channel)
         combined = np.clip(combined, 0.0, 1.0)
 
-        '''
-        print("[VISUAL DEBUG] perception min=%.3f max=%.3f mean=%.3f",
-        combined.min(),
-        combined.max(),
-        combined.mean())
-        '''
         return {
             "objects": object_channel,
             "agents": agent_channel,
             "combined": combined,
         }
 
-    # =====================================================================
-    # RACCOLTA TARGET (AGENTI)
-    # =====================================================================
     def _collect_agent_targets(self, perception, agents, hierarchy):
         for club, agent_shapes in agents.items():
             for n, shape in enumerate(agent_shapes):
                 meta = getattr(shape, "metadata", {}) if hasattr(shape, "metadata") else {}
                 target_name = meta.get("entity_name")
 
-                # ignorare sé stessi
+                
                 if target_name:
                     if target_name == self.agent.get_name():
                         continue
@@ -138,10 +105,10 @@ class VisualDetectionModel(DetectionModel):
                 if distance > self.max_detection_distance:
                     return
 
-                # angolo relativo
+                
                 angle = math.degrees(math.atan2(-dy, dx))
 
-                angle = normalize_angle(angle)  # ritorna in [-180,180]
+                angle = normalize_angle(angle)  
 
                 angle_rad = math.radians(angle)
 
@@ -151,18 +118,14 @@ class VisualDetectionModel(DetectionModel):
                 obj_min = angle_rad - half_subt
                 obj_max = angle_rad + half_subt
                 
-                # diverso da gps
-                # print("[VISUAL DEBUG] target_name=%s radius=%.3f pos=(%.2f, %.2f, %.2f)",target_name,radius,dx, dy, dz)
-                #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength=5.0)
+                
                 self._accumulate_occlusion_interval(
                     perception,
                     obj_min,
                     obj_max,
                     strength=1.0
                 )
-    # =====================================================================
-    # RACCOLTA OGGETTI
-    # =====================================================================
+    
     def _collect_object_targets(self, perception, objects):
         for _, (shapes, positions, strengths, uncertainties) in objects.items():
             for i in range(len(shapes)):
@@ -170,7 +133,7 @@ class VisualDetectionModel(DetectionModel):
                 dy = positions[i].y - self.agent.position.y
                 dz = positions[i].z - self.agent.position.z
 
-                # diverso da gps
+                
                 radius = getattr(shapes[i], "bounding_radius", 0.025)
                 strength = strengths[i]
 
@@ -178,10 +141,10 @@ class VisualDetectionModel(DetectionModel):
                 if distance > self.max_detection_distance:
                     return
 
-                # angolo relativo
+                
                 angle = math.degrees(math.atan2(-dy, dx))
 
-                angle = normalize_angle(angle)  # ritorna in [-180,180]
+                angle = normalize_angle(angle)  
 
                 angle_rad = math.radians(angle)
 
@@ -191,7 +154,7 @@ class VisualDetectionModel(DetectionModel):
                 obj_min = angle_rad - half_subt
                 obj_max = angle_rad + half_subt
 
-                #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength)
+                
                 self._accumulate_occlusion_interval(
                     perception,
                     obj_min,
@@ -199,17 +162,12 @@ class VisualDetectionModel(DetectionModel):
                     strength=1.0
                 )
 
-    # =====================================================================
-    # GLOBAL INHIBITION
-    # =====================================================================
     def _apply_global_inhibition(self, perception_channel):
         if self.perception_global_inhibition == 0:
             return
         perception_channel -= self.perception_global_inhibition
 
-    # =====================================================================
-    # ACCUMULO BASATO SU OCCLUSIONE ANGOLARE (subtended angle)
-    # =====================================================================
+  
     def _accumulate_occlusion_interval(self, perception, obj_min, obj_max, strength=1.0):
         """
         Accumula un visual field binario V(φ):
@@ -228,11 +186,10 @@ class VisualDetectionModel(DetectionModel):
             sec_min = (center - self.perception_width / 2) % TWO_PI
             sec_max = (center + self.perception_width / 2) % TWO_PI
     
-            # verifica intersezione tra due intervalli circolari
+            
             if obj_min <= obj_max:
                 obj_intersects = not (sec_max < obj_min or sec_min > obj_max)
             else:
-                # intervallo oggetto attraversa 2π
                 obj_intersects = (sec_min <= obj_max) or (sec_max >= obj_min)
     
             if obj_intersects:
@@ -242,9 +199,7 @@ class VisualDetectionModel(DetectionModel):
     
     
 
-    # =====================================================================
-    # UTILS
-    # =====================================================================
+
     @staticmethod
     def _interval_intersection(a1, a2, b1, b2):
         left = max(a1, b1)
