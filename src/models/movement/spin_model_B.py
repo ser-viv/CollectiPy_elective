@@ -162,8 +162,20 @@ class SpinMovementModelB(MovementModel):
         print(accel_integrand)
         print("dphi")
         print(dphi)
-        accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi 
-        turn_integral = np.sum(np.sin(self.group_angles) * turn_integrand) * dphi
+        
+        # For allocentric reference, angles are in world frame
+        # We need to integrate relative to agent's heading
+        if self.reference == "allocentric":
+            # Get agent heading in radians
+            psi = math.radians(self.agent.orientation.z)
+            # Integrate with cos/sin(φ - ψ) to get relative angles
+            accel_integral = np.sum(np.cos(self.group_angles - psi) * accel_integrand) * dphi
+            turn_integral = np.sum(np.sin(self.group_angles - psi) * turn_integrand) * dphi
+        else:
+            # Egocentric: angles already relative to agent, integrate normally
+            accel_integral = np.sum(np.cos(self.group_angles) * accel_integrand) * dphi
+            turn_integral = np.sum(np.sin(self.group_angles) * turn_integrand) * dphi
+
 
         print("accel_integral")
         print(accel_integral)

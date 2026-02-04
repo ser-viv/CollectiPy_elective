@@ -83,7 +83,7 @@ class VisualDetectionModel(DetectionModel):
                 meta = getattr(shape, "metadata", {}) if hasattr(shape, "metadata") else {}
                 target_name = meta.get("entity_name")
 
-                
+                # ignorare sé stessi
                 if target_name:
                     if target_name == self.agent.get_name():
                         continue
@@ -103,14 +103,24 @@ class VisualDetectionModel(DetectionModel):
 
                 distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
                 if distance > self.max_detection_distance:
-                    return
+                    continue  # Skip this agent, not all remaining ones!
 
+                # angolo relativo
+                angle_world = math.degrees(math.atan2(-dy, dx))
                 
-                angle = math.degrees(math.atan2(-dy, dx))
-
-                angle = normalize_angle(angle)  
+                # Convert to agent's reference frame
+                if self.reference == "egocentric":
+                    # Egocentric: angles relative to agent's heading
+                    angle = normalize_angle(angle_world - self.agent.orientation.z)
+                else:
+                    # Allocentric: angles in world frame
+                    angle = normalize_angle(angle_world)
 
                 angle_rad = math.radians(angle)
+
+                # Map to [0, 2π) for consistency with group_angles
+                if angle_rad < 0:
+                    angle_rad += 2.0 * math.pi
 
                 # subtended angle
                 half_subt = math.atan(radius / max(distance, 1e-6))
@@ -118,49 +128,62 @@ class VisualDetectionModel(DetectionModel):
                 obj_min = angle_rad - half_subt
                 obj_max = angle_rad + half_subt
                 
-                
+                # diverso da gps
+                # print("[VISUAL DEBUG] target_name=%s radius=%.3f pos=(%.2f, %.2f, %.2f)",target_name,radius,dx, dy, dz)
+                #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength=5.0)
                 self._accumulate_occlusion_interval(
                     perception,
                     obj_min,
                     obj_max,
                     strength=1.0
                 )
-    
+
     def _collect_object_targets(self, perception, objects):
-        for _, (shapes, positions, strengths, uncertainties) in objects.items():
-            for i in range(len(shapes)):
-                dx = positions[i].x - self.agent.position.x
-                dy = positions[i].y - self.agent.position.y
-                dz = positions[i].z - self.agent.position.z
-
-                
-                radius = getattr(shapes[i], "bounding_radius", 0.025)
-                strength = strengths[i]
-
-                distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
-                if distance > self.max_detection_distance:
-                    return
-
-                
-                angle = math.degrees(math.atan2(-dy, dx))
-
-                angle = normalize_angle(angle)  
-
-                angle_rad = math.radians(angle)
-
-                # subtended angle
-                half_subt = math.atan(radius / max(distance, 1e-6))
-
-                obj_min = angle_rad - half_subt
-                obj_max = angle_rad + half_subt
-
-                
-                self._accumulate_occlusion_interval(
-                    perception,
-                    obj_min,
-                    obj_max,
-                    strength=1.0
-                )
+            for _, (shapes, positions, strengths, uncertainties) in objects.items():
+                for i in range(len(shapes)):
+                    dx = positions[i].x - self.agent.position.x
+                    dy = positions[i].y - self.agent.position.y
+                    dz = positions[i].z - self.agent.position.z
+    
+                    # diverso da gps
+                    radius = getattr(shapes[i], "bounding_radius", 0.025)
+                    strength = strengths[i]
+    
+                    distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+                    if distance > self.max_detection_distance:
+                        continue  # Skip this object, not all remaining ones!
+                    
+                    # angolo relativo
+                    angle_world = math.degrees(math.atan2(-dy, dx))
+                    
+                    # Convert to agent's reference frame
+                    if self.reference == "egocentric":
+                        # Egocentric: angles relative to agent's heading
+                        angle = normalize_angle(angle_world - self.agent.orientation.z)
+                    else:
+                        # Allocentric: angles in world frame
+                        angle = normalize_angle(angle_world)
+    
+                    angle_rad = math.radians(angle)
+    
+                    # Map to [0, 2π) for consistency with group_angles
+                    if angle_rad < 0:
+                        angle_rad += 2.0 * math.pi
+    
+                    # subtended angle
+                    half_subt = math.atan(radius / max(distance, 1e-6))
+    
+                    obj_min = angle_rad - half_subt
+                    obj_max = angle_rad + half_subt
+    
+                    #self._accumulate_occlusion(perception, dx, dy, dz, radius, strength)
+                    self._accumulate_occlusion_interval(
+                        perception,
+                        obj_min,
+                        obj_max,
+                        strength=1.0
+                    )
+    
 
     def _apply_global_inhibition(self, perception_channel):
         if self.perception_global_inhibition == 0:

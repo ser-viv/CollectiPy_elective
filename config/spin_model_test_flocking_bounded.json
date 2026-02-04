@@ -15,7 +15,7 @@
             "arena_0":{
                 "random_seed": 0,
                 "diameter": 4.0,
-                "_id": "rectangle",
+                "_id": "circle",
                 "color": "gray"
             }
         },
@@ -53,9 +53,9 @@
                     "dynamics": "metropolis",
                     "task": "flocking",
                     "alpha0": 0.5,
-                    "alpha1": 20.0,
+                    "alpha1": 3.0,
                     "beta0": 0.1,
-                    "beta1": 20.0,
+                    "beta1": 3.0,
                     "gamma": 0.5
                 }
             }
