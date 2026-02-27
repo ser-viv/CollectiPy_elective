@@ -14,7 +14,7 @@
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
-                "diameter": 4.0,
+                "diameter": 2.0,
                 "_id": "circle",
                 "color": "gray"
             }
@@ -24,39 +24,34 @@
         "agents":{
             "movable_0":{
                 "ticks_per_second": 10,
-                "number": [15],
+                "number": [5],
                 "shape": "cylinder",
                 "max_absolute_velocity": 0.1,
-                "angular_velocity": 60.0,
+                "angular_velocity": 40.0,
                 "height": 0.02,
-                "diameter": 0.05,
+                "diameter": 0.033,
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": 3.0,
-                    "acquisition_per_second": 10
+                    "range": 0.15,
+                    "acquisition_per_second": 12
                 },
                 "moving_behavior":"spin_model_B",
                 "spin_model":{
-                    "v0":0.03,
+                    "v0":0.08,
                     "spin_pre_run_steps": 0,
-                    "perception_width": 0.2,
-                    "num_groups": 16,
-                    "num_spins_per_group": 8,
+                    "perception_width": 0.4,
+                    "num_groups": 30,
+                    "num_spins_per_group": 2,
                     "perception_global_inhibition": 0,
-                    "T": 0.3,
-                    "J": 40,
+                    "T": 0.6,
+                    "J": 20,
                     "nu": 0.4,
                     "p_spin_up": 0.5,
                     "time_delay": 1,
                     "reference": "allocentric",
                     "dynamics": "metropolis",
-                    "task": "flocking",
-                    "alpha0": 0.5,
-                    "alpha1": 3.0,
-                    "beta0": 0.1,
-                    "beta1": 3.0,
-                    "gamma": 0.5
+                    "task": "flocking"
                 }
             }
         }   

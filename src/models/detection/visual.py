@@ -69,7 +69,7 @@ class VisualDetectionModel(DetectionModel):
         object_channel[:] = 0.0
 
         combined = np.maximum(agent_channel, object_channel)
-        combined = np.clip(combined, 0.0, 1.0)
+        combined = np.clip(combined, -1.0, 1.0)
 
         return {
             "objects": object_channel,
@@ -99,7 +99,7 @@ class VisualDetectionModel(DetectionModel):
                 dy = agent_pos.y - self.agent.position.y
                 dz = agent_pos.z - self.agent.position.z
 
-                radius = getattr(shape, "bounding_radius", 0.025)
+                radius = getattr(shape, "bounding_radius", 0.05)
 
                 distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
                 if distance > self.max_detection_distance:
@@ -137,6 +137,10 @@ class VisualDetectionModel(DetectionModel):
                     obj_max,
                     strength=1.0
                 )
+                #print(f"[VISUAL] vicino a dx={dx:.3f} dy={dy:.3f} "
+                #f"angle_world={angle_world:.1f}° "
+               # f"angle_rad={angle_rad:.3f} "
+                #f"settori attivati: {[g for g in range(self.num_groups) if perception[g*self.num_spins_per_group] > 0]}")
 
     def _collect_object_targets(self, perception, objects):
             for _, (shapes, positions, strengths, uncertainties) in objects.items():
@@ -146,7 +150,7 @@ class VisualDetectionModel(DetectionModel):
                     dz = positions[i].z - self.agent.position.z
     
                     # diverso da gps
-                    radius = getattr(shapes[i], "bounding_radius", 0.025)
+                    radius = getattr(shapes[i], "bounding_radius", 0.05)
                     strength = strengths[i]
     
                     distance = math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
@@ -183,6 +187,10 @@ class VisualDetectionModel(DetectionModel):
                         obj_max,
                         strength=1.0
                     )
+                    print(f"[VISUAL] vicino a dx={dx:.3f} dy={dy:.3f} "
+                    f"angle_world={angle_world:.1f}° "
+                    f"angle_rad={angle_rad:.3f} "
+                    f"settori attivati: {[g for g in range(self.num_groups) if perception[g*self.num_spins_per_group] > 0]}")
     
 
     def _apply_global_inhibition(self, perception_channel):
@@ -196,29 +204,54 @@ class VisualDetectionModel(DetectionModel):
         Accumula un visual field binario V(φ):
         tutti i settori del ring che intersecano l'intervallo angolare
         [obj_min, obj_max] ricevono un contributo costante.
+
+        Gestisce correttamente il wrap-around 0/2π sia per l'oggetto
+        che per il settore del gruppo.
         """
-    
+
         TWO_PI = 2.0 * math.pi
-    
+
         # normalizzazione in [0, 2π)
         obj_min = obj_min % TWO_PI
         obj_max = obj_max % TWO_PI
-    
+
+        # flag: l'oggetto attraversa il confine 0/2π?
+        obj_wraps = obj_min > obj_max
+
         for g, center in enumerate(self.group_angles):
-        
+
             sec_min = (center - self.perception_width / 2) % TWO_PI
             sec_max = (center + self.perception_width / 2) % TWO_PI
-    
-            
-            if obj_min <= obj_max:
-                obj_intersects = not (sec_max < obj_min or sec_min > obj_max)
+
+            # flag: il settore attraversa il confine 0/2π?
+            sec_wraps = sec_min > sec_max
+
+            # --- quattro casi possibili ---
+
+            if not obj_wraps and not sec_wraps:
+                # caso normale: entrambi gli intervalli sono contigui
+                # [obj_min, obj_max] ∩ [sec_min, sec_max]
+                intersects = not (sec_max < obj_min or sec_min > obj_max)
+
+            elif obj_wraps and not sec_wraps:
+                # l'oggetto attraversa 0: occupa [obj_min, 2π) ∪ [0, obj_max]
+                # basta che il settore tocchi uno dei due pezzi
+                intersects = (sec_max >= obj_min) or (sec_min <= obj_max)
+
+            elif not obj_wraps and sec_wraps:
+                # il settore attraversa 0: occupa [sec_min, 2π) ∪ [0, sec_max]
+                # questo è il caso che il codice originale non gestiva
+                intersects = (obj_max >= sec_min) or (obj_min <= sec_max)
+
             else:
-                obj_intersects = (sec_min <= obj_max) or (sec_max >= obj_min)
-    
-            if obj_intersects:
+                # entrambi attraversano 0: si intersecano sempre
+                # (entrambi contengono la regione intorno a 0)
+                intersects = True
+
+            if intersects:
                 start = g * self.num_spins_per_group
                 end = start + self.num_spins_per_group
-                perception[start:end] = 1.0
+                perception[start:end] = strength
     
     
 
