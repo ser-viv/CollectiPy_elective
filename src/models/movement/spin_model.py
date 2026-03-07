@@ -175,8 +175,14 @@ class SpinMovementModel(MovementModel):
         self.spin_system: Optional[object] = None
         self._fallback_model = None
         self.detection_model = self._create_detection_model()
-        # Carica dinamicamente il perception module basato su detection type
-        detection_type = str(agent.config_elem.get("detection", {}).get("type", "GPS") or "GPS").upper()
+        # Dynamically load perception module based on detection type
+        detection_config = agent.config_elem.get("detection", {})
+        if isinstance(detection_config, str):
+            # Legacy format: detection is just a type string
+            detection_type = detection_config.upper()
+        else:
+            # Standard format: detection is a dict with type key
+            detection_type = str(detection_config.get("type", "GPS") or "GPS").upper()
         self._perception_module_class = _resolve_perception_module_class(detection_type)
         self.perception_model = self._perception_module_class(
             self.num_groups,
@@ -204,7 +210,12 @@ class SpinMovementModel(MovementModel):
         }
         detection_name = getattr(self.agent, "detection", None)
         if not detection_name:
-            detection_name = self.agent.config_elem.get("detection", "GPS")
+            detection_config = self.agent.config_elem.get("detection", "GPS")
+            # Handle both string and dict formats
+            if isinstance(detection_config, str):
+                detection_name = detection_config
+            else:
+                detection_name = detection_config.get("type", "GPS") if detection_config else "GPS"
         return get_detection_model(detection_name, self.agent, context)
 
     def reset(self) -> None:
