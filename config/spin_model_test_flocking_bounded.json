@@ -8,7 +8,7 @@
         },
         "gui":{
             "_id": "2D",
-            "on_click": ["spins","detection"],
+            "on_click": ["show_spins","detection"],
             "view": ["detection"]
         },
         "arenas":{
