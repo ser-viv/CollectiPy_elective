@@ -8,7 +8,7 @@
         },
         "gui":{
             "_id": "2D",
-            "on_click": ["show_spins","detection"],
+            "on_click": ["spins","detection"],
             "view": ["detection"]
         },
         "arenas":{
@@ -27,7 +27,7 @@
                 "number": [5],
                 "shape": "cylinder",
                 "max_absolute_velocity": 0.1,
-                "angular_velocity": 40.0,
+                "max_angular_velocity": 40.0,
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",

@@ -17,7 +17,7 @@ from models.utility_functions import normalize_angle
 
 _PI = math.pi
 
-class SpinModuleFlocking:
+class SpinModule:
     """Spin module specialized for flocking behaviors."""
     def __init__(
         self,
