@@ -27,6 +27,7 @@ class SpinModule:
         T: float,
         J: float,
         nu: float,
+        global_inhibition: float = 0.0,
         p_spin_up: float = 0.5,
         time_delay: int = 1,
         dynamics: str = 'metropolis'
@@ -43,6 +44,7 @@ class SpinModule:
         self.spins_history = [self.spins.copy()]
         self.history_length = time_delay
         self.dynamics = dynamics
+        self.global_inhibition = global_inhibition
         group_angles = np.linspace(0, 2 * _PI, num_groups, endpoint=False)
         self.angles = np.repeat(group_angles, self.num_spins_per_group)
         self._unit_angle_vectors = np.exp(1j * self.angles)
@@ -83,7 +85,7 @@ class SpinModule:
 
     def calculate_hamiltonian(self, state):
         """
-        Calculate the Hamiltonian H = -[1/Ns * Σ Jij σi σj + Σ hi σi]
+        Calculate the Hamiltonian H = -[1/Ns * Σ Jij σi σj + Σ hi σi - hb Σ σi]
         with σ ∈ {-1, +1} as in the Salahshour & Couzin model.
         """
         state_flat = state.ravel()
@@ -97,7 +99,10 @@ class SpinModule:
         # external field term: -Σ hi σi
         external_field_contribution = -np.dot(self.external_field, state_pm1_flat)
 
-        return H_spin_interactions + external_field_contribution
+        # global inhibition term: -hb Σ σi
+        global_inhibition_contribution = self.global_inhibition * np.sum(state_pm1_flat)
+
+        return H_spin_interactions + external_field_contribution - global_inhibition_contribution
 
     def step(self, timedelay=True, dt=0.1, tau=33):
         """Execute one simulation step of the spin dynamics."""
