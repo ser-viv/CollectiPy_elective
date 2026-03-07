@@ -40,7 +40,6 @@ class VisualDetectionModel(DetectionModel):
         )
 
         self.reference = context.get("reference", "egocentric")
-        self.perception_global_inhibition = context.get("perception_global_inhibition", 0)
 
         self.max_detection_distance = float(
             context.get("max_detection_distance",
@@ -64,9 +63,6 @@ class VisualDetectionModel(DetectionModel):
         self._collect_agent_targets(agent_channel, agents, hierarchy)
 
         self._collect_object_targets(object_channel, objects)
-
-        self._apply_global_inhibition(agent_channel)
-        self._apply_global_inhibition(object_channel)
 
         # Clear object channel for flocking (focus on agents)
         object_channel[:] = 0.0
@@ -177,12 +173,7 @@ class VisualDetectionModel(DetectionModel):
                     obj_max,
                     strength=1.0
                 )
-
-    def _apply_global_inhibition(self, perception_channel):
-        if self.perception_global_inhibition == 0:
-            return
-        perception_channel -= self.perception_global_inhibition
-
+                
     def _accumulate_occlusion_interval(self, perception, obj_min, obj_max, strength=1.0):
         """
         Accumulate a binary visual field V(φ):

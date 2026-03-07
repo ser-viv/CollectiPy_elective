@@ -33,12 +33,11 @@
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": 0.15,
+                    "range": "inf",
                     "acquisition_per_second": 12
                 },
                 "moving_behavior":"spin_model",
                 "spin_model":{
-                    "v0":0.08,
                     "spin_pre_run_steps": 0,
                     "perception_width": 0.4,
                     "num_groups": 30,
