@@ -7,15 +7,14 @@
 #  license. Attribution is required if this code is used in other works.
 # ------------------------------------------------------------------------------
 
-import logging
 import math
-from plugin_base import MovementModel
-from plugin_registry import register_movement_model
+from core.configuration.plugin_base import MovementModel
 from models.movement.common import apply_motion_state
-from models.utils import normalize_angle
-from geometry_utils.vector3D import Vector3D
+from models.utility_functions import normalize_angle
+from core.util.geometry_utils.vector3D import Vector3D
+from core.util.logging_util import get_logger
 
-logger = logging.getLogger("sim.movement.random_way_point")
+logger = get_logger("movement.random_way_point")
 
 class RandomWayPointMovement(MovementModel):
     """Random way point movement."""
@@ -60,50 +59,135 @@ class RandomWayPointMovement(MovementModel):
             agent.motion = agent.RIGHT
         else:
             agent.motion = agent.FORWARD
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("%s steering %s (angle_to_goal=%.2f)", agent.get_name(), agent.motion, angle_to_goal)
+        logger.debug("%s steering %s (angle_to_goal=%.2f)", agent.get_name(), agent.motion, angle_to_goal)
 
     def _random_goal(self, arena_shape):
-        """Return a new goal position respecting spherical wrap if available."""
-        if not self.wrap_config or self.wrap_config.get("projection") != "ellipse":
-            return self.agent.shape._get_random_point_inside_shape(self.agent.random_generator, arena_shape)
-        rand = self.agent.random_generator
-        lon = rand.uniform(-math.pi, math.pi)
-        u = rand.uniform(-1.0, 1.0)
-        lat = math.asin(u)
-        return self._latlon_to_point(lat, lon)
+        """Return a new goal position."""
+        agent = self.agent
+        shape = agent.get_shape()
+        shape_min = shape.min_vert()
+        shape_max = shape.max_vert()
+        dx = float(shape_max.x - shape_min.x)
+        dy = float(shape_max.y - shape_min.y)
+        agent_radius = 0.5 * max(abs(dx), abs(dy))
+        wrap_cfg = self.wrap_config or getattr(agent, "wrap_config", None)
+        unbounded = bool(wrap_cfg and wrap_cfg.get("unbounded"))
+        # Optional opt-in: use the unbounded sampling rule even in bounded arenas.
+        use_local_disk = bool(
+            getattr(agent, "random_waypoint_local", False)
+            or getattr(agent, "random_waypoint_unbounded_sampling", False)
+        )
+        margin_factor = getattr(agent, "random_waypoint_margin_factor", 1.0)
+        if unbounded:
+            center = getattr(agent, "position", None) or agent.get_start_position()
+            factor = getattr(agent, "random_waypoint_radius_factor", 5.0)
+            radius = max(agent_radius * factor, agent_radius * 1.5)
+            distribution = getattr(agent, "random_waypoint_distribution", "uniform")
+            return self._sample_spawn(center, radius, distribution)
 
-    def _latlon_to_point(self, lat: float, lon: float):
-        """Map spherical coordinates back to the flattened ellipse."""
-        origin = self.wrap_config["origin"]
-        width = self.wrap_config["width"]
-        height = self.wrap_config["height"]
-        x = origin.x + ((lon + math.pi) / (2 * math.pi)) * width
-        y = origin.y + ((lat + (math.pi * 0.5)) / math.pi) * height
-        return Vector3D(x, y, self.agent.position.z)
+        if use_local_disk:
+            center = getattr(agent, "position", None) or agent.get_start_position()
+            factor = getattr(agent, "random_waypoint_radius_factor", 5.0)
+            radius = max(agent_radius * factor, agent_radius * 1.5)
+            distribution = getattr(agent, "random_waypoint_distribution", "uniform")
+            goal = self._sample_spawn(center, radius, distribution)
+            return self._clamp_goal(goal, arena_shape, agent_radius * margin_factor)
+
+        min_v = arena_shape.min_vert()
+        max_v = arena_shape.max_vert()
+        min_x = float(min_v.x)
+        max_x = float(max_v.x)
+        min_y = float(min_v.y)
+        max_y = float(max_v.y)
+
+        hierarchy = getattr(agent, "hierarchy_context", None)
+        node_id = getattr(agent, "hierarchy_node", None)
+        info = getattr(hierarchy, "information_scope", None) if hierarchy is not None else None
+        over_cfg = info.get("over") if isinstance(info, dict) else None
+        use_node_bounds = (
+            hierarchy is not None
+            and isinstance(over_cfg, dict)
+            and "movement" in over_cfg
+            and node_id is not None
+        )
+
+        if use_node_bounds:
+            get_node_fn = getattr(hierarchy, "get_node", None)
+            if callable(get_node_fn):
+                try:
+                    node = get_node_fn(node_id)
+                except Exception:
+                    node = None
+            else:
+                node = None
+            if node:
+                bounds = getattr(node, "bounds", None)
+                if bounds:
+                    min_x = float(getattr(bounds, "x_min", min_x))
+                    min_y = float(getattr(bounds, "y_min", min_y))
+                    max_x = float(getattr(bounds, "x_max", max_x))
+                    max_y = float(getattr(bounds, "y_max", max_y))
+
+        margin = agent_radius * margin_factor
+        min_x += margin
+        max_x -= margin
+        min_y += margin
+        max_y -= margin
+
+        if min_x > max_x:
+            cx_full = (min_v.x + max_v.x) * 0.5
+            min_x = max_x = cx_full
+        if min_y > max_y:
+            cy_full = (min_v.y + max_v.y) * 0.5
+            min_y = max_y = cy_full
+
+        cx = 0.5 * (min_x + max_x)
+        cy = 0.5 * (min_y + max_y)
+
+        distribution = getattr(agent, "random_waypoint_distribution", "uniform")
+        distribution = (distribution or "uniform").lower()
+
+        rng = agent.get_random_generator()
+
+        if distribution == "gaussian":
+            span_x = max_x - min_x
+            span_y = max_y - min_y
+            std_x = span_x / 6.0 if span_x > 0.0 else 0.0
+            std_y = span_y / 6.0 if span_y > 0.0 else 0.0
+            gx = rng.gauss(cx, std_x) if std_x > 0.0 else cx
+            gy = rng.gauss(cy, std_y) if std_y > 0.0 else cy
+            gx = min(max(gx, min_x), max_x)
+            gy = min(max(gy, min_y), max_y)
+        elif distribution == "ring":
+            half_w = max_x - min_x
+            half_h = max_y - min_y
+            r_max = 0.5 * min(half_w, half_h)
+            if r_max <= 0.0:
+                gx, gy = cx, cy
+            else:
+                r_min = 0.5 * r_max
+                r = rng.uniform(r_min, r_max)
+                theta = rng.uniform(0.0, 2.0 * math.pi)
+                gx = cx + r * math.cos(theta)
+                gy = cy + r * math.sin(theta)
+                gx = min(max(gx, min_x), max_x)
+                gy = min(max(gy, min_y), max_y)
+
+        else:
+            gx = rng.uniform(min_x, max_x)
+            gy = rng.uniform(min_y, max_y)
+
+        gz = abs(shape_min.z)
+        goal = Vector3D(gx, gy, gz)
+        return goal
+
 
     def _wrapped_vector_to_goal(self, agent):
         """Return the shortest vector towards the goal accounting for wrap."""
-        if not self.wrap_config:
-            return (
-                agent.goal_position.x - agent.position.x,
-                agent.goal_position.y - agent.position.y
-            )
-        dx = agent.goal_position.x - agent.position.x
-        dy = agent.goal_position.y - agent.position.y
-        width = self.wrap_config["width"]
-        height = self.wrap_config["height"]
-        dx = self._wrap_delta(dx, width)
-        dy = self._wrap_delta(dy, height)
-        return dx, dy
-
-    @staticmethod
-    def _wrap_delta(delta, extent):
-        """Wrap a delta around the given extent to keep the shortest distance."""
-        if extent <= 0:
-            return delta
-        half = extent * 0.5
-        return ((delta + half) % extent) - half
+        return (
+            agent.goal_position.x - agent.position.x,
+            agent.goal_position.y - agent.position.y
+        )
 
     def _distance_to_goal(self, agent):
         """Return the wrapped distance to the current goal."""
@@ -112,4 +196,42 @@ class RandomWayPointMovement(MovementModel):
         dx, dy = self._wrapped_vector_to_goal(agent)
         return math.hypot(dx, dy)
 
-register_movement_model("random_way_point", lambda agent: RandomWayPointMovement(agent))
+    def _sample_spawn(self, center, radius, distribution):
+        """Sample a point from the configured distribution."""
+        rng = self.agent.random_generator
+        dist = str(distribution).lower()
+        match dist:
+            case "gaussian":
+                std = radius / 3.0
+                x = rng.gauss(center.x, std)
+                y = rng.gauss(center.y, std)
+            case "ring":
+                r = rng.uniform(radius * 0.5, radius)
+                theta = rng.uniform(0.0, 2 * math.pi)
+                x = center.x + r * math.cos(theta)
+                y = center.y + r * math.sin(theta)
+            case _:
+                r = math.sqrt(rng.uniform(0.0, 1.0)) * radius
+                theta = rng.uniform(0.0, 2 * math.pi)
+                x = center.x + r * math.cos(theta)
+                y = center.y + r * math.sin(theta)
+        return Vector3D(x, y, self.agent.position.z)
+
+    def _clamp_goal(self, goal: Vector3D, arena_shape, margin: float) -> Vector3D:
+        """Clamp a sampled goal inside the arena bounds (margin shrinks walls)."""
+        min_v = arena_shape.min_vert()
+        max_v = arena_shape.max_vert()
+        min_x = float(min_v.x) + margin
+        max_x = float(max_v.x) - margin
+        min_y = float(min_v.y) + margin
+        max_y = float(max_v.y) - margin
+        if min_x > max_x:
+            min_x = max_x = (min_v.x + max_v.x) * 0.5
+        if min_y > max_y:
+            min_y = max_y = (min_v.y + max_v.y) * 0.5
+        gx = min(max(goal.x, min_x), max_x)
+        gy = min(max(goal.y, min_y), max_y)
+        return Vector3D(gx, gy, goal.z)
+
+
+MOVEMENT_MODEL_CLASS = RandomWayPointMovement

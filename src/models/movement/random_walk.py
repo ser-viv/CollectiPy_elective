@@ -7,14 +7,13 @@
 #  license. Attribution is required if this code is used in other works.
 # ------------------------------------------------------------------------------
 
-import logging
 import math
-from plugin_base import MovementModel
-from plugin_registry import register_movement_model
+from core.configuration.plugin_base import MovementModel
 from models.movement.common import apply_motion_state
-from models.utils import levy, wrapped_cauchy_pp
+from models.utility_functions import levy, wrapped_cauchy_pp
+from core.util.logging_util import get_logger
 
-logger = logging.getLogger("sim.movement.random_walk")
+logger = get_logger("movement.random_walk")
 
 class RandomWalkMovement(MovementModel):
     """Random walk movement."""
@@ -48,4 +47,5 @@ class RandomWalkMovement(MovementModel):
                 agent.turning_ticks = int(angle * agent.max_turning_ticks)
                 logger.debug("%s starts turning %s for %s ticks", agent.get_name(), agent.motion, agent.turning_ticks)
 
-register_movement_model("random_walk", lambda agent: RandomWalkMovement(agent))
+
+MOVEMENT_MODEL_CLASS = RandomWalkMovement

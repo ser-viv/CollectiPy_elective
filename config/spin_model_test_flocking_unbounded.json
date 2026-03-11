@@ -1,24 +1,27 @@
 {
     "environment":{
+<<<<<<< HEAD
         "collisions": false,
         "ticks_per_second": 10,
+=======
+        "collisions": true,
+>>>>>>> origin/integrate-visual-detection
         "time_limit": 0,
         "num_runs": 1,
-        "results":{
-            "agent_specs": ["base", "spin_model"],
-            "group_specs": ["detection"],
-            "snapshots_per_second": 1
-        },
         "gui":{
             "_id": "2D",
-            "on_click": ["show_spins","detection"],
+            "on_click": ["spins","detection"],
             "view": ["detection"]
         },
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
+<<<<<<< HEAD
                 "diameter": 4.0,
                 "_id": "sphere",
+=======
+                "_id": "unbounded",
+>>>>>>> origin/integrate-visual-detection
                 "color": "gray"
             }
         },
@@ -26,6 +29,7 @@
         },
         "agents":{
             "movable_0":{
+<<<<<<< HEAD
                 "ticks_per_second": 10,
                 "number": [20],
                 "shape": "cylinder",
@@ -39,16 +43,33 @@
                     "type": "VISUAL",
                     "range": 5.0,
                     "acquisition_per_second": 10
+=======
+                "number": [30],
+                "shape": "cylinder",
+                "max_linear_velocity": 0.01,
+                "max_angular_velocity": 10,
+                "dimensions":{
+                    "height": 0.02,
+                    "diameter": 0.033
+                },
+                "color": "blue",
+                "detection": {
+                    "type": "GPS",
+                    "range": 2
+>>>>>>> origin/integrate-visual-detection
                 },
                 "moving_behavior":"spin_model_B",
                 "spin_model":{
-                    "spin_pre_run_steps": 0,
                     "perception_width": 0.2,
+<<<<<<< HEAD
                     "num_groups": 40,
                     "num_spins_per_group": 8,
                     "perception_global_inhibition": 0,
+=======
+                    "perception_global_inhibition": 0.2,
+>>>>>>> origin/integrate-visual-detection
                     "T": 0.3,
-                    "J": 40,
+                    "J": 30,
                     "nu": 0.4,
                     "p_spin_up": 0.5,
                     "time_delay": 1,

@@ -18,7 +18,8 @@ plugin system** focused on agent movement models.
 - `src/models/detection/`:
   built-in GPS (and placeholder visual) detection plugins.
 - `plugins/` (top-level, sibling of `src/`):
-  placeholder for external user-defined plugins.
+  package for external plugins. It includes `plugins/examples/led_state_plugin.py`
+  as a ready-to-use example logic plugin that colors agent LEDs based on messaging activity.
 
 ## Agent routines
 
@@ -80,27 +81,18 @@ Then, in the JSON config, add:
 
 The simulator will import `plugins.my_movement` and automatically use
 the new behaviour for any agent whose `moving_behavior` is set to
-`"my_movement"`.
+`"my_movement"`. Modules listed under either the top-level `plugins`
+key or `environment.plugins` are imported before the environment
+starts.
 
 Similarly, detection or logic models can be registered with
 `register_detection_model` / `register_logic_model`. They become
-available through the respective `*_behavior` fields in the config.
-The distribution ships with the `hierarchy_confinement` logic plugin,
-which clamps agents inside the arena hierarchy node they declare via
-`"hierarchy_node"`. Agents start bound to the root node (`"0"`) and can change
-nodes later by calling `set_hierarchy_node` after validating a path through
-`ArenaHierarchy.path_between`. Enable the plugin per agent group with:
-
-```json
-"logic_behavior": "hierarchy_confinement",
-"hierarchy_node": "0.1"
-```
-
-The plugin exposes the current level through `agent.get_hierarchy_level()` and
-uses the arena metadata (`arena_shape.metadata["hierarchy"]`) to compute
-adjacent nodes (`neighbors`) and coordinate-based paths (`locate_path`). This
-information is meant to support future logic where agents explicitly decide when
-to traverse deeper into the tree without teleporting between siblings.
+available through the respective `*_behavior` fields in the config. The repo
+ships with a simple example logic plugin (`led_state`) in
+`plugins/examples/led_state_plugin.py`; add
+`"plugins": ["plugins.examples.led_state_plugin"]` to the config and set an
+agent group's `"logic_behavior": "led_state"` (see `config/random_wp_test_bounded_plugin_ex.json`)
+to enable the LED-based messaging indicator.
 
 Motion/kinematics models follow the same registry pattern. To provide a custom
 integrator (e.g., a bicycle model), implement `plugin_base.MotionModel` and
@@ -167,7 +159,7 @@ to the outgoing payload, but the simulator always injects the standard metadata
 (`tick`, global position, full entity key, and the public identifier when the
 message kind is `id`) before forwarding the packet to the bus.
 
-**Policy summary**
+### Policy summary
 
 - `broadcast` is the only type that may remain anonymous.
 - `rebroadcast` packets are always ID-aware: half the time the agent emits its

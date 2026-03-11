@@ -1,0 +1,56 @@
+{
+    "plugins": ["plugins.examples.led_state_plugin"],
+    "environment":{
+        "collisions": true,
+        "time_limit": 0,
+        "num_runs": 1,
+        "gui":{
+            "_id": "2D",
+            "on_click": ["messages"],
+            "view": ["messages"]
+        },
+        "arenas":{
+            "arena_0":{
+                "random_seed": 0,
+                "_id": "rectangle",
+                "color": "gray",
+                "dimensions":{
+                    "width": 1,
+                    "depth": 1
+                }
+            }
+        },
+        "objects":{
+            "static_0":{
+                "number": [3],
+                "_id": "idle",
+                "shape": "cylinder",
+                "dimensions":{
+                    "height": 0.2,
+                    "diameter": 0.05
+                }
+            }
+        },
+        "agents":{
+            "movable_0":{
+                "number": [20],
+                "shape": "cylinder",
+                "max_linear_velocity": 0.005,
+                "max_angular_velocity": 35,
+                "dimensions":{
+                    "height": 0.02,
+                    "diameter": 0.033
+                },
+                "color": "blue",
+                "logic_behavior": "led_state",
+                "moving_behavior":"random_way_point",
+                "messages": {
+                    "handshake_timeout": 17,
+                    "comm_range": 0.2,
+                    "type": "hand-shake",
+                    "kind": "id-aware"
+                }      
+            }
+        }   
+    }
+}

@@ -3,29 +3,27 @@
         "collisions": false,
         "time_limit": 0,
         "num_runs": 1,
-        "results": {},
-        "gui": {
-            "_id": "2D"
-        },
+        "gui": {"_id": "2D"},
         "arenas": {
             "arena_0": {
-                "_id": "rectangle",
-                "width": 1.2,
-                "depth": 0.8,
+                "_id": "unbounded",
                 "random_seed": 13,
-                "color": "white"
+                "color": "gray"
             }
         },
         "objects": {},
         "agents": {
             "movable_0": {
-                "number": [10],
+                "number": [180],
                 "shape": "cylinder",
                 "height": 0.02,
-                "diameter": 0.03,
+                "dimensions":{
+                    "height": 0.02,
+                    "diameter": 0.03
+                },
                 "color": "blue",
-                "linear_velocity": 0.03,
-                "angular_velocity": 60,
+                "max_linear_velocity": 0.03,
+                "max_angular_velocity": 60,
                 "moving_behavior": "random_way_point"
             }
         }

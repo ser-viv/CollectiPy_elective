@@ -3,20 +3,20 @@
         "collisions": true,
         "time_limit": 0,
         "num_runs": 1,
-        "results":{
-            "group_specs": ["messages"],
-            "snapshots_per_second": 1
-        },
         "gui":{
-            "_id": "2D"
+            "_id": "2D",
+            "on_click": ["messages"],
+            "view": ["messages"]
         },
         "arenas":{
             "arena_0":{
                 "random_seed": 0,
-                "width": 1,
-                "depth": 1,
                 "_id": "rectangle",
-                "color": "gray"
+                "color": "gray",
+                "dimensions":{
+                    "width": 1,
+                    "depth": 1
+                }
             }
         },
         "objects":{
@@ -24,25 +24,26 @@
                 "number": [3],
                 "_id": "idle",
                 "shape": "cylinder",
-                "height": 0.2,
-                "diameter": 0.05
+                "dimensions":{
+                    "height": 0.2,
+                    "diameter": 0.05
+                }
             }
         },
         "agents":{
             "movable_0":{
-                "ticks_per_second": 20,
                 "number": [20],
                 "shape": "cylinder",
-                "linear_velocity": 0.03,
-                "angular_velocity": 45,
-                "height": 0.02,
-                "diameter": 0.033,
+                "max_linear_velocity": 0.03,
+                "max_angular_velocity": 45,
+                "dimensions":{
+                    "height": 0.02,
+                    "diameter": 0.033
+                },
                 "color": "blue",
                 "moving_behavior":"random_way_point",
                 "messages": {
-                    "tx_per_second": 2,
-                    "rx_per_second": 4,
-                    "comm_range": 0.1,
+                    "comm_range": 0.6,
                     "type": "broadcast",
                     "kind": "anonymous"
                 }      
