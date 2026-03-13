@@ -1,10 +1,6 @@
 {
     "environment":{
-<<<<<<< HEAD
-        "collisions": true,
-=======
         "collisions": false,
->>>>>>> origin/integrate-visual-detection
         "ticks_per_second": 10,
         "time_limit": 0,
         "num_runs": 1,
@@ -31,21 +27,13 @@
                 "number": [5],
                 "shape": "cylinder",
                 "max_absolute_velocity": 0.1,
-<<<<<<< HEAD
-                "angular_velocity": 40.0,
-=======
                 "max_angular_velocity": 40.0,
->>>>>>> origin/integrate-visual-detection
                 "height": 0.02,
                 "diameter": 0.033,
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-<<<<<<< HEAD
-                    "range": 0.15,
-=======
-                    "range": "inf",
->>>>>>> origin/integrate-visual-detection
+                    "range": "1",
                     "acquisition_per_second": 12
                 },
                 "moving_behavior":"spin_model_B",
@@ -55,11 +43,7 @@
                     "perception_width": 0.4,
                     "num_groups": 30,
                     "num_spins_per_group": 2,
-<<<<<<< HEAD
-                    "perception_global_inhibition": 0,
-=======
                     "global_inhibition": 0,
->>>>>>> origin/integrate-visual-detection
                     "T": 0.6,
                     "J": 20,
                     "nu": 0.4,
@@ -67,7 +51,8 @@
                     "time_delay": 1,
                     "reference": "allocentric",
                     "dynamics": "metropolis",
-                    "task": "flocking"
+                    "task": "flocking",
+                    "edge_weight": 0.5
                 }
             }
         }   

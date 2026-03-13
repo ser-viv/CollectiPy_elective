@@ -13,14 +13,10 @@ Movement model package.
 Importing submodules registers the built-in movement models.
 """
 
-<<<<<<< HEAD
-# Register built-in models on import.
+from __future__ import annotations
 from . import random_walk  # noqa: F401
 from . import random_way_point  # noqa: F401
 from . import spin_model_B  # noqa: F401
-=======
-from __future__ import annotations
-
 import importlib
 import inspect
 import pkgutil
@@ -71,4 +67,3 @@ def _autoregister_builtin_movement_models() -> None:
 
 
 _autoregister_builtin_movement_models()
->>>>>>> origin/integrate-visual-detection

@@ -10,14 +10,14 @@
 import logging
 import math
 import numpy as np
-from models.spinsystem import SpinSystem
-from plugin_base import MovementModel
-from plugin_registry import (
+from models.spinsystem_B import SpinSystem
+from core.configuration.plugin_base import MovementModel
+from core.configuration.plugin_registry import (
     get_detection_model,
     get_movement_model,
     register_movement_model,
 )
-from models.utils import normalize_angle
+from models.utility_functions import normalize_angle
 
 logger = logging.getLogger("sim.spin")
 
@@ -114,6 +114,12 @@ class SpinMovementModel(MovementModel):
             return
         # vettore di attivazioni angolari
         self.spin_system.update_external_field(self.perception)
+        # contributo edge                                                    # ← AGGIUNGI
+        if hasattr(self, "_last_edge_counts") and self._last_edge_counts is not None:  # ← AGGIUNGI
+            self.spin_system.update_edge_field(                             # ← AGGIUNGI
+                self._last_edge_counts,                                     # ← AGGIUNGI
+                edge_weight=float(self.spin_model_params.get("edge_weight", 0.5))  # ← AGGIUNGI
+            )                                                               # ← AGGIUNGI
         # DEBUG temporaneo
         active_sectors = np.sum(self.perception > 0)
         #print("[FIELD] agente=%s | settori_attivi=%d/%d | ""max_field=%.3f | mean_field=%.3f",self.agent.get_name(),active_sectors,len(self.perception),float(np.max(self.perception)),    float(np.mean(self.perception)))
@@ -175,8 +181,11 @@ class SpinMovementModel(MovementModel):
             self.perception = None
             return
         if isinstance(snapshot, dict):
+            self._last_edge_counts = snapshot.get("edge_counts", None)
             selected, channel_name = self._select_perception_channel(snapshot)
+            
         else:
+            self._last_edge_counts = None
             selected, channel_name = snapshot, "raw"
         self.perception = selected
         self._active_perception_channel = channel_name

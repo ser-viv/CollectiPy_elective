@@ -141,8 +141,6 @@ class SpinSystem:
         self.avg_direction = None
         if sum_vector != 0:
             self.avg_direction = math.atan2(sum_vector.imag, sum_vector.real)
-        print(f"[SPIN] bump direction={math.degrees(angle_rad):.1f}° "
-        f"heading agente={self.agent.orientation.z:.1f}°")
         return self.avg_direction
 
     def get_avg_direction_of_activity(self):
@@ -181,6 +179,23 @@ class SpinSystem:
     def update_external_field(self, perceptual_outputs):
         """Update external field."""
         self.external_field = np.asarray(perceptual_outputs, dtype=np.float32)
+
+    def update_edge_field(self, edge_counts, edge_weight=0.5):
+        """
+        Aggiunge un contributo lineare proporzionale al numero di edge
+        al campo esterno già impostato da update_external_field.
+    
+        Campo finale = external_field + edge_weight * (edge_counts / max_edges)
+    
+        Args:
+            edge_counts:  array int32 (channel_size,) dal visual.py
+            edge_weight:  peso del contributo (configurabile dal JSON)
+        """
+        edge_field = np.asarray(edge_counts, dtype=np.float32)
+        max_edges = edge_field.max()
+        if max_edges > 0:
+            edge_field = edge_field / max_edges
+        self.external_field = self.external_field + edge_weight * edge_field
 
     def get_states(self):
         """Return the states."""
