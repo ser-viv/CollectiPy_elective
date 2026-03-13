@@ -184,9 +184,9 @@ class SpinSystem:
         """
         Aggiunge un contributo lineare proporzionale al numero di edge
         al campo esterno già impostato da update_external_field.
-    
+
         Campo finale = external_field + edge_weight * (edge_counts / max_edges)
-    
+
         Args:
             edge_counts:  array int32 (channel_size,) dal visual.py
             edge_weight:  peso del contributo (configurabile dal JSON)
@@ -196,6 +196,42 @@ class SpinSystem:
         if max_edges > 0:
             edge_field = edge_field / max_edges
         self.external_field = self.external_field + edge_weight * edge_field
+
+    def update_repulsion_field(self, agent_metadata, repulsion_weight=0.5, repulsion_range=0.3):
+        """
+        Aggiunge un contributo negativo al campo esterno inversamente proporzionale
+        alla distanza: più i vicini sono vicini, più il campo viene inibito.
+    
+        Contributo per ogni vicino i:
+            field -= repulsion_weight * (1 / distance_i) * gaussian(αi, angle_i, sigma)
+    
+        Il contributo diventa trascurabile per distanze > repulsion_range.
+    
+        Args:
+            agent_metadata:   lista di dict da visual.py (angle, distance, ...)
+            repulsion_weight: intensità della repulsione
+            repulsion_range:  distanza oltre la quale la repulsione è trascurabile
+        """
+        TWO_PI = 2.0 * math.pi
+        sigma = 2 * math.pi / self.num_groups  # larghezza gaussiana = un gruppo
+    
+        for ag in agent_metadata:
+            distance = ag["distance"]
+            angle    = ag["angle"]
+    
+            # contributo inversamente proporzionale alla distanza
+            strength = repulsion_weight / max(distance, 1e-6)
+    
+            # decade rapidamente oltre repulsion_range
+            if distance > repulsion_range:
+                continue
+            
+            # gaussiana centrata sull'angolo del vicino
+            diff = self.angles - angle
+            diff = (diff + math.pi) % TWO_PI - math.pi  # wrap in [-π, π]
+            gaussian = np.exp(-0.5 * (diff / sigma) ** 2)
+    
+            self.external_field = self.external_field - strength * gaussian
 
     def get_states(self):
         """Return the states."""

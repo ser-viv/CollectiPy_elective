@@ -119,7 +119,15 @@ class SpinMovementModel(MovementModel):
             self.spin_system.update_edge_field(                             # ← AGGIUNGI
                 self._last_edge_counts,                                     # ← AGGIUNGI
                 edge_weight=float(self.spin_model_params.get("edge_weight", 0.5))  # ← AGGIUNGI
-            )                                                               # ← AGGIUNGI
+            )       
+            
+        # contributo repulsione
+        if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
+            self.spin_system.update_repulsion_field(
+                self._last_agent_metadata,
+                repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.5)),
+                repulsion_range=float(self.spin_model_params.get("repulsion_range", 0.15))
+            )                                                        # ← AGGIUNGI
         # DEBUG temporaneo
         active_sectors = np.sum(self.perception > 0)
         #print("[FIELD] agente=%s | settori_attivi=%d/%d | ""max_field=%.3f | mean_field=%.3f",self.agent.get_name(),active_sectors,len(self.perception),float(np.max(self.perception)),    float(np.mean(self.perception)))
@@ -182,10 +190,13 @@ class SpinMovementModel(MovementModel):
             return
         if isinstance(snapshot, dict):
             self._last_edge_counts = snapshot.get("edge_counts", None)
+            self._last_agent_metadata = snapshot.get("agent_metadata", None)
             selected, channel_name = self._select_perception_channel(snapshot)
+
             
         else:
             self._last_edge_counts = None
+            self._last_agent_metadata = None
             selected, channel_name = snapshot, "raw"
         self.perception = selected
         self._active_perception_channel = channel_name

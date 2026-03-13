@@ -52,7 +52,9 @@
                     "reference": "allocentric",
                     "dynamics": "metropolis",
                     "task": "flocking",
-                    "edge_weight": 0.5
+                    "edge_weight": 0.5,
+                    "repulsion_weight": 0.5,
+                    "repulsion_range":  0.15
                 }
             }
         }   
