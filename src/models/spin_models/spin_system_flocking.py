@@ -70,6 +70,8 @@ class SpinModule:
         Convert internal state 0/1 to ±1 for Hamiltonian calculation.
         0 → -1 (inactive)
         1 → +1 (active)
+        This conversion is required because the Hamiltonian uses σ ∈ {-1, +1},
+        not {0, 1}.
         """
         return 2 * state.astype(np.float32) - 1
 
@@ -87,8 +89,8 @@ class SpinModule:
         """
         Calculate the Hamiltonian H = -[1/Ns * Σ Jij σi σj + Σ hi σi - hb Σ σi]
         with σ ∈ {-1, +1} as in the Salahshour & Couzin model.
+        The internal state is 0/1 (uint8); conversion to ±1 happens here.
         """
-        state_flat = state.ravel()
         state_pm1 = self._to_pm1(state)
         state_pm1_flat = state_pm1.ravel()
 
@@ -109,25 +111,25 @@ class SpinModule:
         rng_randint = self.random_generator.randint
         i = rng_randint(0, self.num_groups - 1)
         j = rng_randint(0, self.num_spins_per_group - 1)
-        
+
         state_to_use = self.spins
         if timedelay:
             hybrid_state = self.spins_history[0].copy()
             hybrid_state[i, j] = self.spins[i, j]
             state_to_use = hybrid_state
-        
+
         current_hamiltonian = self.calculate_hamiltonian(state_to_use)
         state_to_use[i, j] ^= 1
         new_hamiltonian = self.calculate_hamiltonian(state_to_use)
         delta_h = new_hamiltonian - current_hamiltonian
-        
+
         if self.dynamics == 'metropolis':
             self._metropolis_acceptance(i, j, delta_h)
         elif self.dynamics == 'glauber':
             self._glauber_acceptance(i, j, delta_h, dt, tau)
         else:
             raise ValueError(f"Unknown dynamics type: {self.dynamics}")
-        
+
         self.spins_history.append(self.spins.copy())
         if len(self.spins_history) > self.history_length:
             self.spins_history.pop(0)
@@ -155,26 +157,23 @@ class SpinModule:
     def average_direction_of_activity(self):
         """
         Calculate the average direction of active spins (σ = +1).
-        Returns angle in radians.
+        Returns angle in radians, or None if no active spins or all spins active.
         """
         flattened_spins = self.spins.ravel()
-        if np.all(flattened_spins == 0):
+        if np.all(flattened_spins == 1):
             self.avg_direction = None
             return None
-        
+
         active_mask = flattened_spins == 1
         if not np.any(active_mask):
             self.avg_direction = None
             return None
-        
-        unit_vectors = self._unit_angle_vectors
-        sum_vector = np.sum(unit_vectors[active_mask])
-        
+
+        sum_vector = np.sum(self._unit_angle_vectors[active_mask])
+        self.avg_direction = None
         if sum_vector != 0:
             self.avg_direction = math.atan2(sum_vector.imag, sum_vector.real)
-        else:
-            self.avg_direction = None
-        
+
         return self.avg_direction
 
     def get_avg_direction_of_activity(self):
@@ -187,7 +186,7 @@ class SpinModule:
         active_mask = flattened_spins == 1
         if not np.any(active_mask):
             return float('inf')
-        
+
         sum_vector = np.sum(self._unit_angle_vectors[active_mask])
         magnitude = abs(sum_vector)
         return 1 / magnitude if magnitude != 0 else float('inf')
@@ -197,7 +196,7 @@ class SpinModule:
         flattened_spins = self.spins.ravel()
         active_mask = flattened_spins == 1
         active_angles = self.angles[active_mask]
-        
+
         if len(active_angles) > 1:
             unit_vectors = np.exp(1j * active_angles)
             R = abs(np.mean(unit_vectors))
@@ -215,6 +214,58 @@ class SpinModule:
         """Update the external field from perception."""
         self.external_field = np.asarray(perceptual_outputs, dtype=np.float32)
 
+    def update_edge_field(self, edge_counts, edge_weight=0.7):
+        """
+        Add a linear contribution proportional to the edge count to the
+        external field already set by update_external_field.
+
+        Final field = external_field + edge_weight * (edge_counts / max_edges)
+
+        Args:
+            edge_counts:  int32 array (channel_size,) from visual.py
+            edge_weight:  weight of the contribution (configurable from JSON)
+        """
+        edge_field = np.asarray(edge_counts, dtype=np.float32)
+        max_edges = edge_field.max()
+        if max_edges > 0:
+            edge_field = edge_field / max_edges
+        self.external_field = self.external_field + edge_weight * edge_field
+
+    '''def update_repulsion_field(self, agent_metadata, repulsion_weight=0.5, repulsion_range=0.3):
+        """
+        Add a negative contribution to the external field, inversely proportional
+        to distance: the closer the neighbours, the more the field is inhibited.
+
+        Contribution per neighbour i:
+            field -= repulsion_weight * (1 / distance_i) * gaussian(αi, angle_i, sigma)
+
+        The contribution becomes negligible for distances > repulsion_range.
+
+        Args:
+            agent_metadata:   list of dicts from visual.py (angle, distance, ...)
+            repulsion_weight: repulsion intensity
+            repulsion_range:  distance beyond which repulsion is negligible
+        """
+        TWO_PI = 2.0 * math.pi
+        sigma = 2 * math.pi / self.num_groups  # Gaussian width = one group
+
+        for ag in agent_metadata:
+            distance = ag["distance"]
+            angle = ag["angle"]
+
+            if distance > repulsion_range:
+                continue
+
+            # contribution inversely proportional to distance
+            strength = repulsion_weight / max(distance, 1e-6)
+
+            # Gaussian centred on the neighbour's angle
+            diff = self.angles - angle
+            diff = (diff + math.pi) % TWO_PI - math.pi  # wrap to [-π, π]
+            gaussian = np.exp(-0.5 * (diff / sigma) ** 2)
+
+            self.external_field = self.external_field - strength * gaussian
+        '''
     def get_states(self):
         """Return the current spin states."""
         return self.spins
@@ -240,4 +291,4 @@ class SpinModule:
 
     def sense_other_ring(self, other_ring_states, gain=1.0):
         """Sense another ring and update perception based on coupling."""
-        self.external_field = gain * np.asarray(other_ring_states, dtype=np.float32)
+        self.external_field = gain * np.asarray(other_ring_states, dtype=np.float32).ravel()

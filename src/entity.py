@@ -1046,8 +1046,6 @@ class Agent(Entity):
 
     def run(self,tick,arena_shape,objects,agents):
         """Run the simulation routine."""
-        print("[DEBUG]", entity.get_name(), "max_abs_vel =", getattr(entity, "max_absolute_velocity", None))
-        print("[DEBUG]", entity.get_name(), "max_ang_vel =", getattr(entity, "max_angular_velocity", None))
 
         pass
 

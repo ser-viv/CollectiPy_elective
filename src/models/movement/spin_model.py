@@ -152,41 +152,23 @@ class SpinMovementModel(MovementModel):
         self.spin_model_params = agent.config_elem.get("spin_model", {})
         
         self.spin_pre_run_steps = self.spin_model_params.get("spin_pre_run_steps", 0)
-<<<<<<< HEAD
-        self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 10)
-        
-        self.perception_width = self.spin_model_params.get("perception_width", 0.5)
-        
-        self.num_groups = self.spin_model_params.get("num_groups", 16)
-        self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 8)
-        
-        self.perception_global_inhibition = self.spin_model_params.get("perception_global_inhibition", 0)
-        
-=======
         self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 3)
         self.perception_width = self.spin_model_params.get("perception_width", 0.3)
         self.num_groups = self.spin_model_params.get("num_groups", 8)
         self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 5)
         self.global_inhibition = self.spin_model_params.get("global_inhibition", 0)
 
->>>>>>> origin/integrate-visual-detection
         agent_task = agent.get_task() if hasattr(agent, "get_task") else None
         spin_task = self.spin_model_params.get("task")
         self.task = agent_task or spin_task or "selection"
         if agent_task is None and hasattr(agent, "set_task"):
             agent.set_task(self.task)
 
-<<<<<<< HEAD
-        self.reference = self.spin_model_params.get("reference", "egocentric")
-        self.fallback_behavior = agent.config_elem.get("fallback_moving_behavior", "none")
-        
-=======
         # finally resolve the backend class now that the task is known
         self._spin_module_class = _resolve_spin_module_class(self.moving_behavior, self.task)
 
         self.reference = self.spin_model_params.get("reference", "egocentric")
         self.fallback_behavior = str(agent.config_elem.get("fallback_moving_behavior", "none") or "none").lower()
->>>>>>> origin/integrate-visual-detection
         self.group_angles = np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False)
         self.perception = None
         self._active_perception_channel = "objects"
@@ -247,17 +229,10 @@ class SpinMovementModel(MovementModel):
             float(self.spin_model_params.get("T", 0.5)),
             float(self.spin_model_params.get("J", 1)),
             float(self.spin_model_params.get("nu", 0)),
-<<<<<<< HEAD
-            float(self.spin_model_params.get("p_spin_up", 0.5)),
-            int(self.spin_model_params.get("time_delay", 1)),
-            self.spin_model_params.get("dynamics", "metropolis"),
-
-=======
             global_inhibition=self.global_inhibition,
             p_spin_up=float(self.spin_model_params.get("p_spin_up", 0.5)),
             time_delay=int(self.spin_model_params.get("time_delay", 1)),
             dynamics=self.spin_model_params.get("dynamics", "metropolis"),
->>>>>>> origin/integrate-visual-detection
         )
 
 
@@ -281,14 +256,10 @@ class SpinMovementModel(MovementModel):
 
     def step(self, agent, tick: int, arena_shape, objects: dict, agents: dict) -> None:
         """Execute the simulation step."""
-<<<<<<< HEAD
-        # campo per ring attractor
-=======
         if self.spin_system is None:
             self.reset()
             if self.spin_system is None:
                 return
->>>>>>> origin/integrate-visual-detection
         self._update_perception(objects, agents, tick, arena_shape)
         # fallback se non percepisce
         if self.perception is None or not np.any(self.perception > 0):
@@ -324,18 +295,6 @@ class SpinMovementModel(MovementModel):
         self.agent.linear_velocity_cmd = self.agent.max_absolute_velocity * scaling_factor
         # velocità angolare punta verso il picco del ring-attractor
         self.agent.angular_velocity_cmd = angle_deg
-<<<<<<< HEAD
-        
-        # log
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                "%s spin direction updated -> angle=%.2f width=%.4f scaling=%.3f",
-                self.agent.get_name(),
-                angle_deg,
-                width,
-                scaling_factor
-            )
-=======
         logger.debug(
             "%s spin direction updated -> angle=%.2f width=%.4f scaling=%.3f",
             self.agent.get_name(),
@@ -343,7 +302,6 @@ class SpinMovementModel(MovementModel):
             width,
             scaling_factor
         )
->>>>>>> origin/integrate-visual-detection
 
     # def vision_field()
 

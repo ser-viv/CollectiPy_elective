@@ -144,15 +144,6 @@ class VisualDetectionModel(DetectionModel):
                     g for g in range(self.num_groups)
                     if edge_counts[g * self.num_spins_per_group] > 0
                 ))
-                print(
-                    f"[EDGE] {self.agent.get_name()} → {target_name or f'{club}_{n}'} | "
-                    f"dist={distance:.3f} | "
-                    f"angle={math.degrees(angle_rad):.1f}° | "
-                    f"edge_left={math.degrees(edge_left):.1f}° | "
-                    f"edge_right={math.degrees(edge_right):.1f}° | "
-                    f"width={math.degrees(2*half_subt):.2f}° | "
-                    f"gruppi_con_edge={active_edge_groups}"
-                )
                 # metadati
                 agent_metadata.append({
                     "name":          target_name or f"{club}_{n}",
