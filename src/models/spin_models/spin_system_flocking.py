@@ -2,7 +2,7 @@
 #  CollectiPy
 #  Copyright (c) 2025 Fabio Oddi
 #
-#  This file is part of CollectyPy, released under the BSD 3-Clause License.
+#  This file is part of CollectiPy, released under the BSD 3-Clause License.
 #  You may use, modify, and redistribute this file according to the terms of the
 #  license. Attribution is required if this code is used in other works.
 # ------------------------------------------------------------------------------
@@ -231,41 +231,134 @@ class SpinModule:
             edge_field = edge_field / max_edges
         self.external_field = self.external_field + edge_weight * edge_field
 
-    '''def update_repulsion_field(self, agent_metadata, repulsion_weight=0.5, repulsion_range=0.3):
+    def update_body_repulsion_field(self, agent_metadata, repulsion_weight=0.5):
         """
-        Add a negative contribution to the external field, inversely proportional
-        to distance: the closer the neighbours, the more the field is inhibited.
+        Add a uniform negative contribution to the external field for each spin
+        whose angular sector overlaps the *body* of a perceived neighbour.
 
-        Contribution per neighbour i:
-            field -= repulsion_weight * (1 / distance_i) * gaussian(αi, angle_i, sigma)
+        The body of neighbour k occupies the angular interval:
+            [angle_k - angular_width_k / 2,  angle_k + angular_width_k / 2]
 
-        The contribution becomes negligible for distances > repulsion_range.
+        For every spin whose sector intersects that interval the field is
+        decremented by `repulsion_weight / N_perceived`, where N_perceived is
+        the total number of neighbours currently visible (normalisation that
+        makes the effect independent of crowd size while still being distance-free).
+
+        There is deliberately NO dependence on distance.
 
         Args:
-            agent_metadata:   list of dicts from visual.py (angle, distance, ...)
-            repulsion_weight: repulsion intensity
-            repulsion_range:  distance beyond which repulsion is negligible
+            agent_metadata:   list of dicts from visual.py
+                              Required keys: "angle" (rad), "angular_width" (rad)
+            repulsion_weight: total repulsion intensity (configurable from JSON)
         """
+        if not agent_metadata:
+            return
+
         TWO_PI = 2.0 * math.pi
-        sigma = 2 * math.pi / self.num_groups  # Gaussian width = one group
+        n_perceived = len(agent_metadata)
+        # Per-agent contribution (distance-free, count-normalised)
+        contribution = repulsion_weight / n_perceived
+
+        repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group,
+                                   dtype=np.float32)
+
+        # Angular half-width of each spin sector
+        sector_hw = _PI / self.num_groups  # = 2π/(2·G)
 
         for ag in agent_metadata:
-            distance = ag["distance"]
-            angle = ag["angle"]
+            body_center = ag["angle"] % TWO_PI
+            body_hw     = ag["angular_width"] / 2.0
 
-            if distance > repulsion_range:
-                continue
+            body_min = (body_center - body_hw) % TWO_PI
+            body_max = (body_center + body_hw) % TWO_PI
+            body_wraps = body_min > body_max
 
-            # contribution inversely proportional to distance
-            strength = repulsion_weight / max(distance, 1e-6)
+            for g in range(self.num_groups):
+                sec_center = self.angles[g * self.num_spins_per_group]
+                sec_min = (sec_center - sector_hw) % TWO_PI
+                sec_max = (sec_center + sector_hw) % TWO_PI
+                sec_wraps = sec_min > sec_max
 
-            # Gaussian centred on the neighbour's angle
-            diff = self.angles - angle
-            diff = (diff + math.pi) % TWO_PI - math.pi  # wrap to [-π, π]
-            gaussian = np.exp(-0.5 * (diff / sigma) ** 2)
+                # Circular interval intersection check
+                if not body_wraps and not sec_wraps:
+                    intersects = not (sec_max < body_min or sec_min > body_max)
+                elif body_wraps and not sec_wraps:
+                    intersects = (sec_max >= body_min) or (sec_min <= body_max)
+                elif not body_wraps and sec_wraps:
+                    intersects = (body_max >= sec_min) or (body_min <= sec_max)
+                else:
+                    intersects = True
 
-            self.external_field = self.external_field - strength * gaussian
-        '''
+                if intersects:
+                    start = g * self.num_spins_per_group
+                    end   = start + self.num_spins_per_group
+                    repulsion_field[start:end] += contribution
+
+        self.external_field = self.external_field - repulsion_field
+
+    def update_arena_repulsion_field(self, arena_metadata, arena_repulsion_weight=0.01):
+        """
+        Add a negative contribution to the external field for each spin whose
+        angular sector overlaps a visible segment of the arena boundary.
+
+        Analogous to update_body_repulsion_field but specific to arena boundary
+        segments. Each visible segment contributes independently, normalised by
+        the total number of visible segments so that the total repulsion intensity
+        is always `repulsion_weight` regardless of how many boundary samples are
+        currently visible.
+
+        There is deliberately NO dependence on distance.
+
+        Args:
+            arena_metadata:   list of dicts from visual.py _collect_arena_boundary.
+                              Required keys: "angle" (rad), "angular_width" (rad)
+            repulsion_weight: total repulsion intensity (configurable from JSON)
+        """
+        if not arena_metadata:
+            return
+
+        TWO_PI = 2.0 * math.pi
+        n_visible = len(arena_metadata)
+        # Per-segment contribution, normalised by number of visible segments
+        contribution = arena_repulsion_weight / n_visible
+
+        repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group,
+                                   dtype=np.float32)
+
+        # Angular half-width of each spin sector
+        sector_hw = _PI / self.num_groups  # = 2π/(2·G)
+
+        for seg in arena_metadata:
+            seg_center = seg["angle"] % TWO_PI
+            seg_hw     = seg["angular_width"] / 2.0
+
+            seg_min = (seg_center - seg_hw) % TWO_PI
+            seg_max = (seg_center + seg_hw) % TWO_PI
+            seg_wraps = seg_min > seg_max
+
+            for g in range(self.num_groups):
+                sec_center = self.angles[g * self.num_spins_per_group]
+                sec_min = (sec_center - sector_hw) % TWO_PI
+                sec_max = (sec_center + sector_hw) % TWO_PI
+                sec_wraps = sec_min > sec_max
+
+                # Circular interval intersection check
+                if not seg_wraps and not sec_wraps:
+                    intersects = not (sec_max < seg_min or sec_min > seg_max)
+                elif seg_wraps and not sec_wraps:
+                    intersects = (sec_max >= seg_min) or (sec_min <= seg_max)
+                elif not seg_wraps and sec_wraps:
+                    intersects = (seg_max >= sec_min) or (seg_min <= sec_max)
+                else:
+                    intersects = True
+
+                if intersects:
+                    start = g * self.num_spins_per_group
+                    end   = start + self.num_spins_per_group
+                    repulsion_field[start:end] += contribution
+
+        self.external_field = self.external_field - repulsion_field
+
     def get_states(self):
         """Return the current spin states."""
         return self.spins

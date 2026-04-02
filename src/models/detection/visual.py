@@ -13,13 +13,15 @@ class VisualDetectionModel(DetectionModel):
     Modello visivo compatibile con il ring attractor.
 
     Restituisce:
-        agents:       campo binario (invariato)
-        objects:      campo binario oggetti (azzerato per flocking)
-        combined:     max(agents, objects)
-        edge_counts:  array (channel_size,) int32 — per ogni spin, quanti bordi
-                      angolari cadono nel suo settore. Bordo sx e dx contano separatamente.
+        agents:         campo binario agenti (invariato)
+        objects:        campo binario oggetti — ora include i bordi dell'arena circolare
+        combined:       max(agents, objects)
+        edge_counts:    array (channel_size,) int32 — per ogni spin, quanti bordi
+                        angolari cadono nel suo settore. Bordo sx e dx contano separatamente.
         agent_metadata: lista di dict con angle, distance, edge_left, edge_right,
                         angular_width per ogni agente percepito
+        arena_metadata: lista di dict con angle, distance, angular_width per ogni
+                        segmento di bordo dell'arena percepito
     """
 
     def __init__(self, agent, context=None):
@@ -43,6 +45,11 @@ class VisualDetectionModel(DetectionModel):
                 getattr(self.agent, "perception_distance", math.inf))
         )
 
+        # Numero di punti campionati sul bordo circolare dell'arena.
+        # Più alto = rappresentazione più fine ma più costosa.
+        # Configurabile via context: "num_boundary_samples"
+        self.num_boundary_samples = int(context.get("num_boundary_samples", 36))
+
         min_width = 2 * math.pi / self.num_groups
         if self.perception_width < min_width:
             logger.warning(
@@ -58,6 +65,7 @@ class VisualDetectionModel(DetectionModel):
         object_channel = np.zeros(channel_size)
         edge_counts    = np.zeros(channel_size, dtype=np.int32)
         agent_metadata = []
+        arena_metadata = []
 
         hierarchy = self._resolve_hierarchy(agent, arena_shape)
 
@@ -67,10 +75,12 @@ class VisualDetectionModel(DetectionModel):
         )
         self._collect_object_targets(object_channel, objects)
 
+        # Bordi dell'arena: popolano object_channel e arena_metadata
+        if arena_shape is not None:
+            self._collect_arena_boundary(object_channel, arena_shape, arena_metadata)
+
         self._apply_global_inhibition(agent_channel)
         self._apply_global_inhibition(object_channel)
-
-        object_channel[:] = 0.0
 
         combined = np.maximum(agent_channel, object_channel)
         combined = np.clip(combined, 0.0, 1.0)
@@ -81,7 +91,83 @@ class VisualDetectionModel(DetectionModel):
             "combined":       combined,
             "edge_counts":    edge_counts,
             "agent_metadata": agent_metadata,
+            "arena_metadata": arena_metadata,
         }
+
+    def _collect_arena_boundary(self, object_channel, arena_shape, arena_metadata):
+        """
+        Campiona num_boundary_samples punti equidistanti sul bordo dell'arena
+        circolare. Per ciascun punto visibile (distanza <= max_detection_distance)
+        accumula il campo binario in object_channel e aggiunge un entry in
+        arena_metadata con lo stesso formato di agent_metadata (angle, distance,
+        angular_width), compatibile con update_arena_repulsion_field in spin_model.py.
+
+        Il raggio fittizio del punto-bordo è calcolato come la metà dell'arco
+        tra due campioni adiacenti, così la copertura angolare è uniforme e
+        indipendente dalla distanza.
+        """
+        TWO_PI = 2.0 * math.pi
+
+        radius = getattr(arena_shape, "radius", None)
+        if radius is None:
+            # Fallback: prova a ricavarlo dal diametro
+            diameter = getattr(arena_shape, "diameter", None)
+            if diameter is not None:
+                radius = diameter / 2.0
+            else:
+                logger.warning("arena_shape has no radius or diameter attribute; "
+                               "arena boundary perception skipped.")
+                return
+
+        # Centro dell'arena — convenzione (0, 0, 0)
+        cx = getattr(arena_shape, "center_x", 0.0)
+        cy = getattr(arena_shape, "center_y", 0.0)
+
+        # Arco tra campioni adiacenti: usato come "raggio fittizio" del punto
+        # per calcolare l'ampiezza angolare percepita (half_subt).
+        arc_half = (TWO_PI * radius / self.num_boundary_samples) / 2.0
+
+        agent_x = self.agent.position.x
+        agent_y = self.agent.position.y
+
+        for k in range(self.num_boundary_samples):
+            theta = TWO_PI * k / self.num_boundary_samples
+            bx = cx + radius * math.cos(theta)
+            by = cy + radius * math.sin(theta)
+
+            dx = bx - agent_x
+            dy = by - agent_y
+            distance = math.sqrt(dx * dx + dy * dy)
+
+            if distance > self.max_detection_distance:
+                continue
+
+            # Angolo verso il punto-bordo
+            angle_world = math.degrees(math.atan2(-dy, dx))
+
+            if self.reference == "egocentric":
+                angle = normalize_angle(angle_world - self.agent.orientation.z)
+            else:
+                angle = normalize_angle(angle_world)
+
+            angle_rad = math.radians(angle)
+            if angle_rad < 0:
+                angle_rad += TWO_PI
+
+            # Ampiezza angolare: tratta arc_half come raggio apparente del segmento
+            half_subt = math.atan(arc_half / max(distance, 1e-6))
+            obj_min   = angle_rad - half_subt
+            obj_max   = angle_rad + half_subt
+
+            self._accumulate_occlusion_interval(
+                object_channel, obj_min, obj_max, strength=1.0
+            )
+
+            arena_metadata.append({
+                "angle":         angle_rad,
+                "distance":      distance,
+                "angular_width": 2 * half_subt,
+            })
 
     def _collect_agent_targets(self, perception, agents, hierarchy,
                                 edge_counts, agent_metadata):

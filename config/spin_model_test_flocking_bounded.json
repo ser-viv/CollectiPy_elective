@@ -1,62 +1,55 @@
 {
-    "environment":{
+    "environment": {
         "collisions": false,
         "ticks_per_second": 5,
         "time_limit": 0,
         "num_runs": 1,
-        "results":{
-        },
-        "gui":{
+        "results": {},
+        "gui": {
             "_id": "2D",
-            "on_click": ["spins","detection"],
+            "on_click": ["spins", "detection"],
             "view": ["detection"]
         },
-        "arenas":{
-            "arena_0":{
+        "arenas": {
+            "arena_0": {
                 "random_seed": 0,
                 "diameter": 2.0,
                 "_id": "circle",
                 "color": "gray"
             }
         },
-        "objects":{
+        "objects": {
         },
-        "agents":{
-            "movable_0":{
+        "agents": {
+            "movable_0": {
                 "ticks_per_second": 5,
                 "number": [5],
                 "shape": "cylinder",
+                "diameter": 0.033,
+                "height": 0.02,
                 "max_absolute_velocity": 0.1,
                 "max_angular_velocity": 40.0,
-                "height": 0.02,
-                "diameter": 0.033,
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": "1",
-                    "acquisition_per_second": 12
+                    "range": 1.0,
+                    "acquisition_per_second": 12,
+                    "num_boundary_samples": 36
                 },
-                "moving_behavior":"spin_model_B",
-                "spin_model":{
-                    "v0":0.08,
-                    "spin_pre_run_steps": 0,
-                    "perception_width": 0.4,
+                "moving_behavior": "spin_model_B",
+                "spin_model": {
+                    "v0": 0.08,
                     "num_groups": 30,
                     "num_spins_per_group": 2,
-                    "global_inhibition": 0,
                     "T": 0.6,
                     "J": 20,
                     "nu": 0.4,
-                    "p_spin_up": 0.5,
-                    "time_delay": 1,
-                    "reference": "allocentric",
-                    "dynamics": "metropolis",
                     "task": "flocking",
-                    "edge_weight": 0.5,
+                    "arena_repulsion_weight": 0.01,
                     "repulsion_weight": 0.5,
-                    "repulsion_range":  0.15
+                    "repulsion_range": 0.15
                 }
             }
-        }   
+        }
     }
 }
