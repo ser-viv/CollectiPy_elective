@@ -46,7 +46,7 @@
                     "nu": 1,
                     "task": "flocking",
                     "arena_repulsion_weight": 0.0001,
-                    "repulsion_weight": 0.6,
+                    "repulsion_weight": 1,
                     "repulsion_range": 1
                 }
             }

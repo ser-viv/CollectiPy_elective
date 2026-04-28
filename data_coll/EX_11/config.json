@@ -1,0 +1,68 @@
+{
+    "data": {
+        "environment": {
+            "collisions": false,
+            "ticks_per_second": 5,
+            "time_limit": 300,
+            "num_runs": 100,
+            "results": {
+                "base_path": "./data/",
+                "agent_specs": [
+                    "base",
+                    "spin_model"
+                ],
+                "snapshots_per_second": 1,
+                "group_specs": [
+                    "heading"
+                ]
+            },
+            "gui": {},
+            "arena": {
+                "random_seed": null,
+                "_id": "circle",
+                "color": "gray",
+                "dimensions": {
+                    "diameter": 2.0,
+                    "height": 1.0,
+                    "radius": 1.0
+                }
+            },
+            "objects": {},
+            "agents": {
+                "movable_0": {
+                    "ticks_per_second": 5,
+                    "number": 5,
+                    "shape": "cylinder",
+                    "max_absolute_velocity": 0.1,
+                    "max_angular_velocity": 40.0,
+                    "color": "blue",
+                    "detection": {
+                        "type": "VISUAL",
+                        "range": 1.0,
+                        "acquisition_per_second": 12,
+                        "num_boundary_samples": 36
+                    },
+                    "moving_behavior": "spin_model_B",
+                    "spin_model": {
+                        "v0": 0.08,
+                        "num_groups": 30,
+                        "num_spins_per_group": 2,
+                        "T": 0.4,
+                        "J": 5,
+                        "nu": 1,
+                        "task": "flocking",
+                        "arena_repulsion_weight": 0.0001,
+                        "repulsion_weight": 0.6,
+                        "repulsion_range": 0.6
+                    },
+                    "dimensions": {
+                        "diameter": 0.033,
+                        "height": 0.02,
+                        "radius": 0.0165
+                    }
+                }
+            }
+        }
+    },
+    "output_folder_name": "circle_nocol_run100_movable_0_spin_model_b_base_heading_spin_model"
+}
