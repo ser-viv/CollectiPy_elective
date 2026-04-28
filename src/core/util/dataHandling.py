@@ -8,7 +8,8 @@
 # ------------------------------------------------------------------------------
 
 from __future__ import annotations
-
+import numpy as np
+#import pandas
 import math, os, json, pickle, shutil, zipfile
 from pathlib import Path
 from core.configuration.config import Config
@@ -75,6 +76,7 @@ class DataHandling():
         self._graphs_root = None
         # File handle for group-level heading output (created on new_run if requested)
         self._group_heading_file = None
+        self._metrics_file = None
         self.hierarchy_enabled = bool(getattr(config_elem, "arena", {}).get("hierarchy"))
 
     def _parse_snapshot_rate(self, value):
@@ -259,13 +261,14 @@ class SpaceDataHandling(DataHandling):
         if self.base_dump_enabled or self.spin_dump_enabled or self.graph_messages_enabled or self.graph_detection_enabled:
             self.save(shapes, spins, metadata, tick=0, ticks_per_second=self._ticks_per_second, force=True)
 
-        # Prepare group-level heading file if requested
-        self._group_heading_file = None
-        if "heading" in self.group_specs and self.run_folder:
-            gh_path = os.path.join(self.run_folder, "group_heading.csv")
-            fh = open(gh_path, "w", encoding="utf-8")
-            fh.write("tick,group,heading_mean_deg\n")
-            self._group_heading_file = fh
+        # ── File metriche di gruppo (unico CSV con tutte le colonne) ────────
+        self._group_heading_file = None  # non più usato, mantenuto per compatibilità
+        self._metrics_file = None
+        if self.run_folder:
+            metrics_path = os.path.join(self.run_folder, "group_metrics.csv")
+            fh = open(metrics_path, "w", encoding="utf-8")
+            fh.write("tick,group,cohesion,polarization,heading_mean_deg\n")
+            self._metrics_file = fh                                           
 
     def save(self, shapes, spins, metadata, tick: int, ticks_per_second: int | None = None, force: bool = False):
         """Save sampled data for the current tick."""
@@ -321,36 +324,69 @@ class SpaceDataHandling(DataHandling):
                         except (TypeError, ValueError):
                             pass
                     entry["pickler"].dump({"type": "row", "value": row})
-        # Write group-level heading aggregates when requested
-        if "heading" in self.group_specs and self._group_heading_file:
+        # ── Metriche di gruppo (coesione, polarizzazione, heading_mean_deg) ──
+        if self._metrics_file and shapes:
             try:
-                for key, entities in (shapes or {}).items():
+                for key, entities in shapes.items():
                     group_meta = (self.agents_metadata or {}).get(key, [])
-                    vals = []
-                    for idx in range(len(entities)):
+
+                    # raccoglie posizioni, orientamenti e heading per agente
+                    positions = []
+                    orientations = []
+                    heading_vals = []
+                    for idx, entity in enumerate(entities):
+                        com = entity.center_of_mass()
+                        positions.append((com.x, com.y))
                         meta = group_meta[idx] if idx < len(group_meta) else {}
+                        orient_z = 0.0
                         if isinstance(meta, dict):
+                            try:
+                                orient_z = float(meta.get("orientation_z", 0.0) or 0.0)
+                            except (TypeError, ValueError):
+                                orient_z = 0.0
+                            # heading: snapshot_metrics ha priorità, poi orientation_z come fallback
                             sm = meta.get("snapshot_metrics") or {}
                             v = sm.get("heading_window_deg")
                             if v is None:
                                 v = sm.get("heading_last_deg")
-                            # fallback to reported orientation_z when snapshot_metrics missing
                             if v is None:
                                 v = meta.get("orientation_z")
                             try:
                                 if v is not None:
-                                    vals.append(float(v))
+                                    heading_vals.append(float(v))
                             except Exception:
                                 pass
-                    if vals:
-                        mean_val = sum(vals) / len(vals)
-                        self._group_heading_file.write(f"{tick},{key},{mean_val:.6f}\n")
-                    else:
-                        # write empty or NaN
-                        self._group_heading_file.write(f"{tick},{key},\n")
-                self._group_heading_file.flush()
+                        orientations.append(orient_z)
+
+                    if len(positions) < 2:
+                        continue
+
+                    # ── Coesione ─────────────────────────────────────────────
+                    xs = [p[0] for p in positions]
+                    ys = [p[1] for p in positions]
+                    cx = sum(xs) / len(xs)
+                    cy = sum(ys) / len(ys)
+                    cohesion = sum(
+                        math.sqrt((x - cx)**2 + (y - cy)**2)
+                        for x, y in positions
+                    ) / len(positions)
+
+                    # ── Polarizzazione ───────────────────────────────────────
+                    angles_rad = [math.radians(o) for o in orientations]
+                    sum_cos = sum(math.cos(a) for a in angles_rad)
+                    sum_sin = sum(math.sin(a) for a in angles_rad)
+                    polarization = math.sqrt(sum_cos**2 + sum_sin**2) / len(angles_rad)
+
+                    # ── Heading medio ────────────────────────────────────────
+                    heading_str = f"{sum(heading_vals)/len(heading_vals):.6f}" if heading_vals else ""
+
+                    self._metrics_file.write(
+                        f"{tick},{key},{cohesion:.6f},{polarization:.6f},{heading_str}\n"
+                    )
+                self._metrics_file.flush()
             except Exception:
-                pass
+                pass                                                           
+
         if self.spin_dump_enabled and self.agent_spin_files:
             for (key, idx), spin_entry in self.agent_spin_files.items():
                 spin_values = self._resolve_spin_entry(spin_data.get(key), idx)
@@ -390,20 +426,20 @@ class SpaceDataHandling(DataHandling):
                         pass
             self.agent_spin_files.clear()
         self._finalize_graph_archives()
-        # Close group heading file if open
-        try:
-            group_file = getattr(self, "_group_heading_file", None)
-            if group_file:
-                try:
-                    group_file.flush()
-                except Exception:
-                    pass
-                try:
-                    group_file.close()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # ── Chiusura file metriche ────────────────────────────────────────── 
+        try:                                                                   
+            metrics_file = getattr(self, "_metrics_file", None)               
+            if metrics_file:                                                   
+                try:                                                           
+                    metrics_file.flush()                                       
+                except Exception:                                              
+                    pass                                                       
+                try:                                                           
+                    metrics_file.close()                                       
+                except Exception:                                              
+                    pass                                                       
+        except Exception:                                                      
+            pass  
         super().close(shapes)
 
     def _agent_identifier(self, key, idx, shape_obj):
