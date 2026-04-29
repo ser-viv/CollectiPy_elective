@@ -1,6 +1,7 @@
 
 repulsion_weight: 0, 0.3, 0.6, 1
 repulsion_range: 0, 0.3, 0.6, 1
+
  RW|RR
 [0, 0] EX_01
 [0, 0.3] EX_02
@@ -17,4 +18,4 @@ repulsion_range: 0, 0.3, 0.6, 1
 [1, 0] EX_13
 [1, 0.3] EX_14
 [1, 0.6] EX_15
-[1, 1] EX_
+[1, 1] EX_16
