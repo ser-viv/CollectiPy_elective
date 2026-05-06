@@ -38,7 +38,7 @@
                     "color": "blue",
                     "detection": {
                         "type": "VISUAL",
-                        "range": 1.0,
+                        "range": "inf",
                         "acquisition_per_second": 12,
                         "num_boundary_samples": 36
                     },
@@ -51,7 +51,7 @@
                         "J": 5,
                         "nu": 1,
                         "task": "flocking",
-                        "arena_repulsion_weight": 0.0001,
+                        "arena_repulsion_weight": 0.1,
                         "repulsion_weight": 0.3,
                         "repulsion_range": 1
                     },

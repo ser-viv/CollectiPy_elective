@@ -152,7 +152,7 @@ class SpinMovementModel(MovementModel):
         self.spin_model_params = agent.config_elem.get("spin_model", {})
         
         self.spin_pre_run_steps = self.spin_model_params.get("spin_pre_run_steps", 0)
-        self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 3)
+        self.spin_per_tick = self.spin_model_params.get("spin_per_tick", 100)
         self.perception_width = self.spin_model_params.get("perception_width", 0.3)
         self.num_groups = self.spin_model_params.get("num_groups", 8)
         self.num_spins_per_group = self.spin_model_params.get("num_spins_per_group", 5)
