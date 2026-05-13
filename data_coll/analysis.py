@@ -13,7 +13,7 @@ Colonne CSV: tick, group, cohesion, polarization, heading_mean_deg
 
 Parametri per esperimento:
     RW = repulsion_weight  ∈ {0, 0.3, 0.6, 1.0}
-    RR = repulsion_range   ∈ {0, 0.3, 0.6, 1.0}
+    ARW = arena_repulsion_weight   ∈ {0, 0.3, 0.6, 1.0}
 
 Analisi prodotte:
     1. Heatmap delle metriche medie (coesione, polarizzazione)
@@ -60,7 +60,7 @@ EXPERIMENTS = {
 }
 
 RW_VALUES = [0.0, 0.3, 0.6, 1.0]
-RR_VALUES = [0.0, 0.3, 0.6, 1.0]
+ARW_VALUES = [0.0, 0.3, 0.6, 1.0]
 
 # Frazione finale della simulazione usata per calcolare le metriche stazionarie
 # (es. 0.5 = ultima metà della simulazione)
@@ -180,7 +180,7 @@ def compute_experiment_stats(runs: list[pd.DataFrame]) -> dict:
 def build_heatmap_matrices(stats: dict[str, dict]) -> dict[str, np.ndarray]:
     """
     Costruisce le matrici 4×4 per le heatmap.
-    Righe = RW (0→3), Colonne = RR (0→3).
+    Righe = RW (0→3), Colonne = ARW (0→3).
     """
     n = len(RW_VALUES)
     pol_mean = np.full((n, n), np.nan)
@@ -188,9 +188,9 @@ def build_heatmap_matrices(stats: dict[str, dict]) -> dict[str, np.ndarray]:
     coh_mean = np.full((n, n), np.nan)
     coh_std  = np.full((n, n), np.nan)
 
-    for ex_name, (rw, rr) in EXPERIMENTS.items():
+    for ex_name, (rw, arw) in EXPERIMENTS.items():
         i = RW_VALUES.index(rw)
-        j = RR_VALUES.index(rr)
+        j = ARW_VALUES.index(arw)
         s = stats.get(ex_name, {})
         pol_mean[i, j] = s.get("polarization_mean", np.nan)
         pol_std[i, j]  = s.get("polarization_std",  np.nan)
@@ -215,7 +215,7 @@ def plot_heatmaps(matrices: dict[str, np.ndarray]):
                coesione media, std coesione.
     """
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle("Metriche stazionarie al variare di RW e RR", fontsize=15, fontweight="bold")
+    fig.suptitle("Metriche stazionarie al variare di RW e ARW", fontsize=15, fontweight="bold")
 
     configs = [
         (axes[0, 0], matrices["pol_mean"], "Polarizzazione media",  "YlOrRd",   True),
@@ -229,11 +229,11 @@ def plot_heatmaps(matrices: dict[str, np.ndarray]):
                        vmin=np.nanmin(mat), vmax=np.nanmax(mat))
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.set_xlabel("Repulsion Range (RR)", fontsize=10)
+        ax.set_xlabel("Arena Repulsion Weight (ARW)", fontsize=10)
         ax.set_ylabel("Repulsion Weight (RW)", fontsize=10)
-        ax.set_xticks(range(len(RR_VALUES)))
+        ax.set_xticks(range(len(ARW_VALUES)))
         ax.set_yticks(range(len(RW_VALUES)))
-        ax.set_xticklabels(RR_VALUES)
+        ax.set_xticklabels(ARW_VALUES)
         ax.set_yticklabels(RW_VALUES)
 
         # annotazioni con il valore numerico
@@ -270,21 +270,21 @@ def plot_temporal_evolution(stats: dict[str, dict], metric: str = "polarization"
                  fontsize=14, fontweight="bold")
 
     rw_list = sorted(set(v[0] for v in EXPERIMENTS.values()))
-    rr_list = sorted(set(v[1] for v in EXPERIMENTS.values()))
+    arw_list = sorted(set(v[1] for v in EXPERIMENTS.values()))
 
     # mappa (rw, rr) → ax
     ax_map = {}
     for i, rw in enumerate(rw_list):
-        for j, rr in enumerate(rr_list):
-            ax_map[(rw, rr)] = axes[i, j]
+        for j, arw in enumerate(arw_list):
+            ax_map[(rw, arw)] = axes[i, j]
 
-    for ex_name, (rw, rr) in EXPERIMENTS.items():
-        ax = ax_map[(rw, rr)]
+    for ex_name, (rw, arw) in EXPERIMENTS.items():
+        ax = ax_map[(rw, arw)]
         s  = stats.get(ex_name, {})
         ts = s.get("timeseries")
         n  = s.get("n_runs", 0)
 
-        ax.set_title(f"RW={rw} RR={rr}\n(n={n})", fontsize=8)
+        ax.set_title(f"RW={rw} ARW={arw}\n(n={n})", fontsize=8)
         ax.set_xlabel("tick", fontsize=7)
         ax.tick_params(labelsize=7)
 
@@ -309,8 +309,8 @@ def plot_temporal_evolution(stats: dict[str, dict], metric: str = "polarization"
     # etichette sulle righe e colonne della griglia
     for i, rw in enumerate(rw_list):
         axes[i, 0].set_ylabel(f"RW={rw}\n{metric_label}", fontsize=8)
-    for j, rr in enumerate(rr_list):
-        axes[0, j].set_title(f"RR={rr}", fontsize=9, fontweight="bold")
+    for j, arw in enumerate(arw_list):
+        axes[0, j].set_title(f"ARW={arw}", fontsize=9, fontweight="bold")
 
     plt.tight_layout()
     path = os.path.join(OUTPUT_DIR, f"evoluzione_temporale_{metric}.png")
@@ -338,11 +338,11 @@ def plot_boxplots(data: dict[str, list[pd.DataFrame]]):
     coh_data = []
 
     for ex_name in sorted(EXPERIMENTS.keys()):
-        rw, rr = EXPERIMENTS[ex_name]
+        rw, arw = EXPERIMENTS[ex_name]
         runs = data.get(ex_name, [])
         pol_vals = [stationary_mean(r, "polarization") for r in runs if len(r) > 0]
         coh_vals = [stationary_mean(r, "cohesion")     for r in runs if len(r) > 0]
-        labels.append(f"{ex_name}\nRW={rw} RR={rr}")
+        labels.append(f"{ex_name}\nRW={rw} ARW={arw}")
         pol_data.append(pol_vals if pol_vals else [np.nan])
         coh_data.append(coh_vals if coh_vals else [np.nan])
 
@@ -385,8 +385,8 @@ def plot_boxplots(data: dict[str, list[pd.DataFrame]]):
 def plot_rw_comparison(stats: dict[str, dict], metric: str = "polarization"):
     """
     4 subplot, uno per valore di RW.
-    Ogni subplot mostra le 4 curve (una per RR) della metrica nel tempo.
-    Utile per vedere come varia RR a parità di RW.
+    Ogni subplot mostra le 4 curve (una per ARW) della metrica nel tempo.
+    Utile per vedere come varia ARW a parità di RW.
     """
     metric_label = {
         "polarization": "Polarizzazione",
@@ -396,7 +396,7 @@ def plot_rw_comparison(stats: dict[str, dict], metric: str = "polarization"):
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()
-    fig.suptitle(f"Effetto di RR su {metric_label} al variare di RW",
+    fig.suptitle(f"Effetto di ARW su {metric_label} al variare di RW",
                  fontsize=13, fontweight="bold")
 
     for idx, rw in enumerate(RW_VALUES):
@@ -407,9 +407,9 @@ def plot_rw_comparison(stats: dict[str, dict], metric: str = "polarization"):
         ax.set_ylim(0, 1.05)
         ax.grid(alpha=0.3)
 
-        for cidx, rr in enumerate(RR_VALUES):
+        for cidx, arw in enumerate(ARW_VALUES):
             # trova l'esperimento corrispondente
-            ex_name = next((k for k, v in EXPERIMENTS.items() if v == [rw, rr]), None)
+            ex_name = next((k for k, v in EXPERIMENTS.items() if v == [rw, arw]), None)
             if ex_name is None:
                 continue
             s  = stats.get(ex_name, {})
@@ -421,7 +421,7 @@ def plot_rw_comparison(stats: dict[str, dict], metric: str = "polarization"):
             mean  = ts[f"{metric}_mean"]
             std   = ts[f"{metric}_std"]
             ax.plot(ticks, mean, color=colors[cidx], linewidth=1.5,
-                    label=f"RR={rr} (n={n})")
+                    label=f"ARW={arw} (n={n})")
             ax.fill_between(ticks, mean - std, mean + std,
                              alpha=0.15, color=colors[cidx])
 
@@ -452,12 +452,12 @@ def main():
 
     # Stampa riepilogo
     print("\nRiepilogo metriche stazionarie:")
-    print(f"{'Exp':<8} {'RW':>5} {'RR':>5} {'Pol_mean':>10} {'Pol_std':>9} {'Coh_mean':>10} {'N_runs':>7}")
+    print(f"{'Exp':<8} {'RW':>5} {'ARW':>5} {'Pol_mean':>10} {'Pol_std':>9} {'Coh_mean':>10} {'N_runs':>7}")
     print("-" * 60)
     for ex in sorted(stats.keys()):
-        rw, rr = EXPERIMENTS[ex]
+        rw, arw = EXPERIMENTS[ex]
         s = stats[ex]
-        print(f"{ex:<8} {rw:>5.1f} {rr:>5.1f} "
+        print(f"{ex:<8} {rw:>5.1f} {arw:>5.1f} "
               f"{s['polarization_mean']:>10.4f} "
               f"{s['polarization_std']:>9.4f} "
               f"{s['cohesion_mean']:>10.4f} "
