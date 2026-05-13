@@ -51,9 +51,8 @@
                         "J": 5,
                         "nu": 1,
                         "task": "flocking",
-                        "arena_repulsion_weight": 0.1,
-                        "repulsion_weight": 0,
-                        "repulsion_range": 1
+                        "arena_repulsion_weight": 1,
+                        "repulsion_weight": 0.0
                     },
                     "dimensions": {
                         "diameter": 0.033,
