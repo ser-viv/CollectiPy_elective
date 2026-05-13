@@ -2,23 +2,33 @@
     "environment": {
         "collisions": false,
         "ticks_per_second": 5,
-        "time_limit": 300,
-        "num_runs": 100,
-        "results": { 
-            "base_path": "./data/",
-            "agent_specs": ["base", "spin_model"],
-            "snapshots_per_second": 1,
-            "group_specs":["heading"]
+        "time_limit": 500,
+        "num_runs": 1,
+        "results": {
+        },
+        "gui": {
+            "_id": "2D",
+            "on_click": ["spins", "detection"],
+            "view": ["detection"]
         },
         "arenas": {
             "arena_0": {
-                "random_seed": null,
+                "random_seed": 0,
                 "diameter": 2.0,
                 "_id": "circle",
                 "color": "gray"
             }
         },
         "objects": {
+             "static_0":{
+                "number": [1],
+                "_id": "idle",
+                "shape": "cylinder",
+                "dimensions":{
+                    "height": 0.2,
+                    "diameter": 0.05
+                }
+            }
         },
         "agents": {
             "movable_0": {
@@ -32,7 +42,7 @@
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": "inf",
+                    "range": 1.0,
                     "acquisition_per_second": 12,
                     "num_boundary_samples": 36
                 },
@@ -41,12 +51,12 @@
                     "v0": 0.08,
                     "num_groups": 30,
                     "num_spins_per_group": 2,
-                    "T": 0.4,
-                    "J": 5,
-                    "nu": 1,
+                    "T": 0.6,
+                    "J": 20,
+                    "nu": 0.4,
                     "task": "flocking",
-                    "arena_repulsion_weight": 0.6,
-                    "repulsion_weight": 1
+                    "arena_repulsion_weight": 0.3,
+                    "repulsion_weight": 0.3
                 }
             }
         }
