@@ -16,7 +16,7 @@ Importing submodules registers the built-in movement models.
 from __future__ import annotations
 from . import random_walk  # noqa: F401
 from . import random_way_point  # noqa: F401
-from . import spin_model_B  # noqa: F401
+from . import spin_model  # noqa: F401
 import importlib
 import inspect
 import pkgutil
