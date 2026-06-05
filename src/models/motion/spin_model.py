@@ -8,8 +8,11 @@
 # ------------------------------------------------------------------------------
 
 from __future__ import annotations
-
 import importlib
+
+#from spin_models import spin_system_flocking
+#import models.spin_models.spin_system_flocking as _ssf
+#print("SPIN SYSTEM FILE:", _ssf.file_)
 import math
 import numpy as np
 from functools import lru_cache
@@ -23,6 +26,8 @@ from models.utility_functions import normalize_angle
 from core.util.logging_util import get_logger
 
 logger = get_logger("movement.spin_model")
+import sys
+sys.stdout.flush()
 
 
 def _resolve_spin_backend_module_name(moving_behavior: str, task: str | None = None) -> str:
@@ -145,6 +150,7 @@ class SpinMovementModel(MovementModel):
     """Spin movement model."""
     def __init__(self, agent):
         """Initialize the instance."""
+        
         self.agent = agent
         self.moving_behavior = str(agent.config_elem.get("moving_behavior", "spin_model") or "spin_model").lower()
         # read parameters before resolving the task; the task may influence
@@ -167,13 +173,13 @@ class SpinMovementModel(MovementModel):
         # finally resolve the backend class now that the task is known
         self._spin_module_class = _resolve_spin_module_class(self.moving_behavior, self.task)
 
-        self.reference = self.spin_model_params.get("reference", "egocentric")
+        self.reference = self.spin_model_params.get("reference", "allocentric")
         self.fallback_behavior = str(agent.config_elem.get("fallback_moving_behavior", "none") or "none").lower()
         self.group_angles = np.linspace(0, 2 * math.pi, self.num_groups, endpoint=False)
         self.perception = None
         self._active_perception_channel = "objects"
         self.perception_range = self._resolve_detection_range()
-        self.spin_system: Optional[object] = None
+        self.spin_system: Optional[spin_system_flocking.SpinModule] = None
         self._fallback_model = None
         self.detection_model = self._create_detection_model()
         # Dynamically load perception module based on detection type
@@ -183,7 +189,7 @@ class SpinMovementModel(MovementModel):
             detection_type = detection_config.upper()
         else:
             # Standard format: detection is a dict with type key
-            detection_type = str(detection_config.get("type", "GPS") or "GPS").upper()
+            detection_type = str(detection_config.get("type", "VISUAL") or "GPS").upper()
         self._perception_module_class = _resolve_perception_module_class(detection_type)
         self.perception_model = self._perception_module_class(
             self.num_groups,
@@ -211,12 +217,12 @@ class SpinMovementModel(MovementModel):
         }
         detection_name = getattr(self.agent, "detection", None)
         if not detection_name:
-            detection_config = self.agent.config_elem.get("detection", "GPS")
+            detection_config = self.agent.config_elem.get("detection", "VISUAL")
             # Handle both string and dict formats
             if isinstance(detection_config, str):
                 detection_name = detection_config
             else:
-                detection_name = detection_config.get("type", "GPS") if detection_config else "GPS"
+                detection_name = detection_config.get("type", "VISUAL") if detection_config else "GPS"
         return get_detection_model(detection_name, self.agent, context)
 
     def reset(self) -> None:
@@ -267,6 +273,31 @@ class SpinMovementModel(MovementModel):
             return
         # vettore di attivazioni angolari
         self.spin_system.update_external_field(self.perception)
+
+
+        
+        # RISISTEMARE
+
+        if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
+            self.spin_system.update_body_repulsion_field(
+                self._last_agent_metadata,
+                repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0)),
+            )
+
+        # contributo edge                                                   
+        if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
+            self.spin_system.update_edge_field(
+                self._last_agent_metadata,
+                edge_weight=float(self.spin_model_params.get("edge_weight", 0))
+            )     
+        
+        # contributo repulsione DA RIVEDERE!!!
+        if hasattr(self, "_last_arena_metadata") and self._last_arena_metadata is not None:
+            self.spin_system.update_arena_repulsion_field(
+                self._last_arena_metadata,
+                arena_repulsion_weight=float(self.spin_model_params.get("arena_repulsion_weight", 0)),
+            ) 
+        
         # aggiorna dinamica spin
         self.spin_system.run_spins(steps=self.spin_per_tick)
 
@@ -315,16 +346,22 @@ class SpinMovementModel(MovementModel):
             if not self.agent.should_sample_detection(tick):
                 return
         raw_snapshot = self.detection_model.sense(self.agent, objects, agents, arena_shape)
+        snapshot = self._convert_detection_snapshot(raw_snapshot)
         if raw_snapshot is None:
             self.perception = None
             return
-        snapshot = self._convert_detection_snapshot(raw_snapshot)
         if snapshot is None:
             self.perception = None
             return
         if isinstance(snapshot, dict):
+            self._last_edge_counts = snapshot.get("edge_counts", None)
+            self._last_agent_metadata = snapshot.get("agent_metadata", None)
+            self._last_arena_metadata = snapshot.get("arena_metadata", None)
             selected, channel_name = self._select_perception_channel(snapshot)
         else:
+            self._last_edge_counts = None
+            self._last_agent_metadata = None
+            self._last_arena_metadata = None
             selected, channel_name = snapshot, "raw"
         self.perception = selected
         self._active_perception_channel = channel_name
@@ -458,4 +495,4 @@ class SpinMovementModel(MovementModel):
 MOVEMENT_MODEL_CLASS = SpinMovementModel
 # legacy alias kept for compatibility; the preferred way to select the
 # flocking variant is via the ``spin_model.task`` configuration field.
-MOVEMENT_MODEL_ALIASES = ("spin_model_flocking",)
+MOVEMENT_MODEL_ALIASES = ("spin_model")

@@ -1,8 +1,9 @@
 {
+    "plugins": ["models.movement.spin_model"],
     "environment": {
         "collisions": false,
         "ticks_per_second": 5,
-        "time_limit": 500,
+        "time_limit": 5000,
         "num_runs": 1,
         "results": {
         },
@@ -20,15 +21,6 @@
             }
         },
         "objects": {
-             "static_0":{
-                "number": [1],
-                "_id": "idle",
-                "shape": "cylinder",
-                "dimensions":{
-                    "height": 0.2,
-                    "diameter": 0.05
-                }
-            }
         },
         "agents": {
             "movable_0": {
@@ -42,12 +34,13 @@
                 "color": "blue",
                 "detection": {
                     "type": "VISUAL",
-                    "range": 1.0,
+                    "range": 1,
                     "acquisition_per_second": 12,
                     "num_boundary_samples": 36
                 },
-                "moving_behavior": "spin_model_B",
+                "moving_behavior": "spin_model",
                 "spin_model": {
+                    "max_perceived_agents": 4,
                     "v0": 0.08,
                     "num_groups": 30,
                     "num_spins_per_group": 2,
@@ -55,8 +48,9 @@
                     "J": 20,
                     "nu": 0.4,
                     "task": "flocking",
-                    "arena_repulsion_weight": 0.3,
-                    "repulsion_weight": 0.3
+                    "arena_repulsion_weight": 1,
+                    "repulsion_weight": 10,
+                    "edge_weight":0.5
                 }
             }
         }

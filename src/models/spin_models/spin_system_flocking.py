@@ -30,12 +30,14 @@ class SpinModule:
         global_inhibition: float = 0.0,
         p_spin_up: float = 0.5,
         time_delay: int = 1,
-        dynamics: str = 'metropolis'
+        dynamics: str = 'metropolis',
+        max_perceived_agents: int = 4
     ):
         """Initialize the flocking spin system instance."""
         self.random_generator = random_generator
         self.num_groups = num_groups
         self.num_spins_per_group = num_spins_per_group
+        self.max_perceived_agents = max_perceived_agents
         self.T = T
         self.J = J
         self.nu = nu
@@ -53,6 +55,7 @@ class SpinModule:
         self.J_matrix = self._precompute_j_matrix()
         self._J_upper = np.triu(self.J_matrix, 1)
         self._interaction_factor = -(self.J / (self.num_spins_per_group * self.num_groups))
+
 
     def _random_spins(self):
         """Generate random spins."""
@@ -91,6 +94,7 @@ class SpinModule:
         with σ ∈ {-1, +1} as in the Salahshour & Couzin model.
         The internal state is 0/1 (uint8); conversion to ±1 happens here.
         """
+        
         state_pm1 = self._to_pm1(state)
         state_pm1_flat = state_pm1.ravel()
 
@@ -214,123 +218,172 @@ class SpinModule:
         """Update the external field from perception."""
         self.external_field = np.asarray(perceptual_outputs, dtype=np.float32)
 
-    def update_edge_field(self, edge_counts, edge_weight=0.7):
+    def _get_agent_sectors(self, ag):
         """
-        Add a linear contribution proportional to the edge count to the
-        external field already set by update_external_field.
+        Return the ordered list of sector indices (groups) covered by agent ag,
+        preserving circular order starting from the leftmost sector.
 
-        Final field = external_field + edge_weight * (edge_counts / max_edges)
+        Returns a list of group indices in angular order.
+        """
+        TWO_PI = 2.0 * math.pi
+        sector_hw = _PI / self.num_groups
+
+        body_center = ag["angle"] % TWO_PI
+        body_hw     = ag["angular_width"] / 2.0
+        body_min = (body_center - body_hw) % TWO_PI
+        body_max = (body_center + body_hw) % TWO_PI
+        body_wraps = body_min > body_max
+
+        overlapping = []
+        for g in range(self.num_groups):
+            sec_center = self.angles[g * self.num_spins_per_group]
+            sec_min = (sec_center - sector_hw) % TWO_PI
+            sec_max = (sec_center + sector_hw) % TWO_PI
+            sec_wraps = sec_min > sec_max
+
+            if not body_wraps and not sec_wraps:
+                intersects = not (sec_max < body_min or sec_min > body_max)
+            elif body_wraps and not sec_wraps:
+                intersects = (sec_max >= body_min) or (sec_min <= body_max)
+            elif not body_wraps and sec_wraps:
+                intersects = (body_max >= sec_min) or (body_min <= sec_max)
+            else:
+                intersects = True
+
+            if intersects:
+                overlapping.append(g)
+
+        if not overlapping:
+            return []
+
+        # Riordina in senso circolare partendo dal settore più vicino a body_min
+        # Per gestire il wrap, ruota la lista in modo che inizi dal primo settore
+        # angolarmente adiacente a body_min
+        if body_wraps:
+            # Il corpo attraversa lo 0: i settori potrebbero essere [27,28,29,0,1,2]
+            # Separa la parte alta (>= body_min) da quella bassa (<= body_max)
+            high = [g for g in overlapping if self.angles[g * self.num_spins_per_group] >= body_min]
+            low  = [g for g in overlapping if self.angles[g * self.num_spins_per_group] <= body_max]
+            overlapping = sorted(high) + sorted(low)
+        else:
+            overlapping = sorted(overlapping)
+
+        return overlapping
+
+    def update_edge_field(self, agent_metadata, edge_weight):
+        """
+        Add a positive contribution to the external field for the two edge sectors
+        of each perceived agent (the angularly outermost sectors of their body).
+
+        Rules:
+        - If an agent occupies >= 2 sectors: the first and last sector are edges.
+        - If an agent occupies exactly 1 sector: that single sector is the edge.
+        - Contribution per edge sector is weighted by angular_width (distance proxy):
+          larger width (closer agent) → stronger attraction toward its edges.
 
         Args:
-            edge_counts:  int32 array (channel_size,) from visual.py
-            edge_weight:  weight of the contribution (configurable from JSON)
+            agent_metadata: list of dicts with keys "angle" (rad), "angular_width" (rad)
+            edge_weight:    total edge attraction intensity (configurable from JSON)
         """
-        edge_field = np.asarray(edge_counts, dtype=np.float32)
-        max_edges = edge_field.max()
-        if max_edges > 0:
-            edge_field = edge_field / max_edges
-        self.external_field = self.external_field + edge_weight * edge_field
+        if not agent_metadata:
+            return
 
-    def update_body_repulsion_field(self, agent_metadata, repulsion_weight=0.5):
+        TWO_PI = 2.0 * math.pi
+        edge_field = np.zeros(self.num_groups * self.num_spins_per_group, dtype=np.float32)
+
+        for ag in agent_metadata:
+            sectors = self._get_agent_sectors(ag)
+            if not sectors:
+                continue
+
+            # Peso proporzionale alla larghezza angolare (agenti vicini → edge più forti)
+            contribution = edge_weight * ag["angular_width"] / TWO_PI
+
+            if len(sectors) == 1:
+                # Agente molto lontano: un solo settore, è sia edge che corpo
+                edge_sectors = [sectors[0]]
+            else:
+                # Primo e ultimo settore in ordine angolare
+                edge_sectors = [sectors[0], sectors[-1]]
+
+            for g in edge_sectors:
+                start = g * self.num_spins_per_group
+                end   = start + self.num_spins_per_group
+                edge_field[start:end] += contribution
+
+        #print("edge attraction contribution", edge_field)
+        self.external_field = self.external_field + edge_field
+
+    def update_body_repulsion_field(self, agent_metadata, repulsion_weight):
         """
-        Add a uniform negative contribution to the external field for each spin
-        whose angular sector overlaps the *body* of a perceived neighbour.
+        Add a negative contribution to the external field for the inner body sectors
+        of each perceived agent (all sectors between the two edges, excluded).
 
-        The body of neighbour k occupies the angular interval:
-            [angle_k - angular_width_k / 2,  angle_k + angular_width_k / 2]
-
-        For every spin whose sector intersects that interval the field is
-        decremented by `repulsion_weight / N_perceived`, where N_perceived is
-        the total number of neighbours currently visible (normalisation that
-        makes the effect independent of crowd size while still being distance-free).
-
-        There is deliberately NO dependence on distance.
+        Rules:
+        - If an agent occupies <= 2 sectors: no inner body → no repulsion from this agent.
+        - If an agent occupies >= 3 sectors: sectors from index 1 to -2 (inclusive) are body.
+        - Contribution per body sector weighted by angular_width (distance proxy):
+          larger width (closer agent) → stronger repulsion.
 
         Args:
-            agent_metadata:   list of dicts from visual.py
-                              Required keys: "angle" (rad), "angular_width" (rad)
+            agent_metadata: list of dicts with keys "angle" (rad), "angular_width" (rad)
             repulsion_weight: total repulsion intensity (configurable from JSON)
         """
         if not agent_metadata:
             return
 
         TWO_PI = 2.0 * math.pi
-        n_perceived = len(agent_metadata)
-        # Per-agent contribution (distance-free, count-normalised)
-        contribution = repulsion_weight / n_perceived
-
-        repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group,
-                                   dtype=np.float32)
-
-        # Angular half-width of each spin sector
-        sector_hw = _PI / self.num_groups  # = 2π/(2·G)
+        repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group, dtype=np.float32)
 
         for ag in agent_metadata:
-            body_center = ag["angle"] % TWO_PI
-            body_hw     = ag["angular_width"] / 2.0
+            sectors = self._get_agent_sectors(ag)
 
-            body_min = (body_center - body_hw) % TWO_PI
-            body_max = (body_center + body_hw) % TWO_PI
-            body_wraps = body_min > body_max
+            # Corpo interno esiste solo se l'agente occupa almeno 3 settori
+            if len(sectors) <= 2:
+                continue
 
-            for g in range(self.num_groups):
-                sec_center = self.angles[g * self.num_spins_per_group]
-                sec_min = (sec_center - sector_hw) % TWO_PI
-                sec_max = (sec_center + sector_hw) % TWO_PI
-                sec_wraps = sec_min > sec_max
+            body_sectors = sectors[1:-1]  # esclude primo e ultimo (che sono gli edges)
 
-                # Circular interval intersection check
-                if not body_wraps and not sec_wraps:
-                    intersects = not (sec_max < body_min or sec_min > body_max)
-                elif body_wraps and not sec_wraps:
-                    intersects = (sec_max >= body_min) or (sec_min <= body_max)
-                elif not body_wraps and sec_wraps:
-                    intersects = (body_max >= sec_min) or (body_min <= sec_max)
-                else:
-                    intersects = True
+            # Peso proporzionale alla larghezza angolare
+            contribution = repulsion_weight * ag["angular_width"] / TWO_PI
 
-                if intersects:
-                    start = g * self.num_spins_per_group
-                    end   = start + self.num_spins_per_group
-                    repulsion_field[start:end] += contribution
+            for g in body_sectors:
+                start = g * self.num_spins_per_group
+                end   = start + self.num_spins_per_group
+                repulsion_field[start:end] += contribution
 
+        #print("body repulsion contribution", repulsion_field)
         self.external_field = self.external_field - repulsion_field
 
-    def update_arena_repulsion_field(self, arena_metadata, arena_repulsion_weight=0.01):
+    def update_arena_repulsion_field(self, arena_metadata, arena_repulsion_weight):
         """
         Add a negative contribution to the external field for each spin whose
         angular sector overlaps a visible segment of the arena boundary.
 
-        Analogous to update_body_repulsion_field but specific to arena boundary
-        segments. Each visible segment contributes independently, normalised by
-        the total number of visible segments so that the total repulsion intensity
-        is always `repulsion_weight` regardless of how many boundary samples are
-        currently visible.
-
-        There is deliberately NO dependence on distance.
+        Unlike the previous version, the contribution of each segment is weighted
+        by its angular_width (distance proxy): segments that are closer subtend a
+        larger angle and therefore contribute more repulsion.
 
         Args:
-            arena_metadata:   list of dicts from visual.py _collect_arena_boundary.
-                              Required keys: "angle" (rad), "angular_width" (rad)
-            repulsion_weight: total repulsion intensity (configurable from JSON)
+            arena_metadata:         list of dicts from visual.py _collect_arena_boundary.
+                                    Required keys: "angle" (rad), "angular_width" (rad)
+            arena_repulsion_weight: total repulsion intensity (configurable from JSON)
         """
         if not arena_metadata:
             return
 
         TWO_PI = 2.0 * math.pi
-        n_visible = len(arena_metadata)
-        # Per-segment contribution, normalised by number of visible segments
-        contribution = arena_repulsion_weight / n_visible
-
         repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group,
                                    dtype=np.float32)
 
-        # Angular half-width of each spin sector
-        sector_hw = _PI / self.num_groups  # = 2π/(2·G)
+        sector_hw = _PI / self.num_groups
 
         for seg in arena_metadata:
             seg_center = seg["angle"] % TWO_PI
             seg_hw     = seg["angular_width"] / 2.0
+
+            # Contributo pesato per distanza: segmenti vicini (angular_width grande) repellono di più
+            seg_contribution = arena_repulsion_weight * seg["angular_width"] / TWO_PI
 
             seg_min = (seg_center - seg_hw) % TWO_PI
             seg_max = (seg_center + seg_hw) % TWO_PI
@@ -342,7 +395,6 @@ class SpinModule:
                 sec_max = (sec_center + sector_hw) % TWO_PI
                 sec_wraps = sec_min > sec_max
 
-                # Circular interval intersection check
                 if not seg_wraps and not sec_wraps:
                     intersects = not (sec_max < seg_min or sec_min > seg_max)
                 elif seg_wraps and not sec_wraps:
@@ -355,7 +407,7 @@ class SpinModule:
                 if intersects:
                     start = g * self.num_spins_per_group
                     end   = start + self.num_spins_per_group
-                    repulsion_field[start:end] += contribution
+                    repulsion_field[start:end] += seg_contribution
 
         self.external_field = self.external_field - repulsion_field
 
