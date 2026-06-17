@@ -23,6 +23,7 @@ from core.util.logging_util import get_logger
 
 logger = get_logger("data_handling")
 
+
 class DataHandlingFactory():
     """Data handling factory."""
     @staticmethod
@@ -78,6 +79,7 @@ class DataHandling():
         self._group_heading_file = None
         self._metrics_file = None
         self.hierarchy_enabled = bool(getattr(config_elem, "arena", {}).get("hierarchy"))
+        self.arena_diameter = config_elem.__dict__.get("data", {}).get("environment", {}).get("arena", {}).get("dimensions", {}).get("diameter")
 
     def _parse_snapshot_rate(self, value):
         """Return a valid snapshot count per simulated second."""
@@ -267,7 +269,7 @@ class SpaceDataHandling(DataHandling):
         if self.run_folder:
             metrics_path = os.path.join(self.run_folder, "group_metrics.csv")
             fh = open(metrics_path, "w", encoding="utf-8")
-            fh.write("tick,group,cohesion,polarization,heading_mean_deg\n")
+            fh.write("tick,group,cohesion,polarization,heading_mean_deg,centroid_x,centroid_y\n")
             self._metrics_file = fh                                           
 
     def save(self, shapes, spins, metadata, tick: int, ticks_per_second: int | None = None, force: bool = False):
@@ -333,10 +335,17 @@ class SpaceDataHandling(DataHandling):
                     # raccoglie posizioni, orientamenti e heading per agente
                     positions = []
                     orientations = []
+                    sum_x = 0
+                    sum_y = 0
                     heading_vals = []
                     for idx, entity in enumerate(entities):
                         com = entity.center_of_mass()
                         positions.append((com.x, com.y))
+                        #print("centro di massa",com.x, com.y)
+                        # Accumulo le coordinate per il calcolo del centroide
+                        sum_x += com.x
+                        sum_y += com.y
+                        print()
                         meta = group_meta[idx] if idx < len(group_meta) else {}
                         orient_z = 0.0
                         if isinstance(meta, dict):
@@ -357,20 +366,26 @@ class SpaceDataHandling(DataHandling):
                             except Exception:
                                 pass
                         orientations.append(orient_z)
+                    print("centroide",sum_x,sum_y)
 
                     if len(positions) < 2:
                         continue
+
+                    # ── Calcolo del Centroide ────────────────────────────────
+                    num_agents = len(positions)
+                    centroid_x = sum_x / num_agents
+                    centroid_y = sum_y / num_agents
+                    print("centroide norm",centroid_x,centroid_y)
 
                     # ── Coesione ─────────────────────────────────────────────
                     xs = [p[0] for p in positions]
                     ys = [p[1] for p in positions]
                     cx = sum(xs) / len(xs)
                     cy = sum(ys) / len(ys)
-                    cohesion = sum(
+                    cohesion = 1 - sum(
                         math.sqrt((x - cx)**2 + (y - cy)**2)
                         for x, y in positions
-                    ) / len(positions)
-
+                    ) / (len(positions)*self.arena_diameter)
                     # ── Polarizzazione ───────────────────────────────────────
                     angles_rad = [math.radians(o) for o in orientations]
                     sum_cos = sum(math.cos(a) for a in angles_rad)
@@ -381,7 +396,7 @@ class SpaceDataHandling(DataHandling):
                     heading_str = f"{sum(heading_vals)/len(heading_vals):.6f}" if heading_vals else ""
 
                     self._metrics_file.write(
-                        f"{tick},{key},{cohesion:.6f},{polarization:.6f},{heading_str}\n"
+                        f"{tick},{key},{cohesion:.6f},{polarization:.6f},{heading_str},{centroid_x:.6f},{centroid_y:.6f}\n"
                     )
                 self._metrics_file.flush()
             except Exception:

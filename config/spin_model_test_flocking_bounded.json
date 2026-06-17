@@ -3,14 +3,12 @@
     "environment": {
         "collisions": false,
         "ticks_per_second": 5,
-        "time_limit": 5000,
-        "num_runs": 1,
+        "time_limit": 300,
+        "num_runs": 30,
         "results": {
-        },
-        "gui": {
-            "_id": "2D",
-            "on_click": ["spins", "detection"],
-            "view": ["detection"]
+            "base_path": "./data/",
+            "agent_specs": ["base", "spin_model"],
+            "snapshots_per_second": 1
         },
         "arenas": {
             "arena_0": {
@@ -49,8 +47,8 @@
                     "nu": 0.4,
                     "task": "flocking",
                     "arena_repulsion_weight": 1,
-                    "repulsion_weight": 10,
-                    "edge_weight":1
+                    "repulsion_weight": 5,
+                    "edge_weight":0.2
                 }
             }
         }
