@@ -50,7 +50,7 @@
                     "task": "flocking",
                     "arena_repulsion_weight": 1,
                     "repulsion_weight": 10,
-                    "edge_weight":0.5
+                    "edge_weight":1
                 }
             }
         }
