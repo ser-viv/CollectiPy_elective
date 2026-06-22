@@ -74,7 +74,7 @@ class DataMixin(_DataMixinProps):
             self._clear_selection(update_view=False)
             return
         self._show_spin_canvas()
-        cmap = cm.get_cmap("coolwarm")
+        cmap = cm.coolwarm
         group_mean_spins = spin[0].mean(axis=1)
         colors_spins = cmap(group_mean_spins)
         group_mean_perception = spin[2].reshape(spin[1][1], spin[1][2]).mean(axis=1)
