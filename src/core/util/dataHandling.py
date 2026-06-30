@@ -345,7 +345,7 @@ class SpaceDataHandling(DataHandling):
                         # Accumulo le coordinate per il calcolo del centroide
                         sum_x += com.x
                         sum_y += com.y
-                        print()
+                        
                         meta = group_meta[idx] if idx < len(group_meta) else {}
                         orient_z = 0.0
                         if isinstance(meta, dict):
@@ -366,7 +366,6 @@ class SpaceDataHandling(DataHandling):
                             except Exception:
                                 pass
                         orientations.append(orient_z)
-                    print("centroide",sum_x,sum_y)
 
                     if len(positions) < 2:
                         continue
@@ -375,7 +374,6 @@ class SpaceDataHandling(DataHandling):
                     num_agents = len(positions)
                     centroid_x = sum_x / num_agents
                     centroid_y = sum_y / num_agents
-                    print("centroide norm",centroid_x,centroid_y)
 
                     # ── Coesione ─────────────────────────────────────────────
                     xs = [p[0] for p in positions]

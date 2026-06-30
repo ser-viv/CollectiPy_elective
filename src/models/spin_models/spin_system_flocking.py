@@ -336,6 +336,7 @@ class SpinModule:
         repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group, dtype=np.float32)
 
         for ag in agent_metadata:
+            #print(ag['name'])
             sectors = self._get_agent_sectors(ag)
 
             # Corpo interno esiste solo se l'agente occupa almeno 3 settori
@@ -345,56 +346,83 @@ class SpinModule:
             body_sectors = sectors[1:-1]  # esclude primo e ultimo (che sono gli edges)
 
             # Peso proporzionale alla larghezza angolare
-            contribution = repulsion_weight * ag["angular_width"] / TWO_PI
+            contribution = repulsion_weight * (ag["angular_width"] / TWO_PI) * (len(sectors)-2)
 
             for g in body_sectors:
                 start = g * self.num_spins_per_group
                 end   = start + self.num_spins_per_group
                 repulsion_field[start:end] += contribution
-
         #print("body repulsion contribution", repulsion_field)
+
+        
         self.external_field = self.external_field - repulsion_field
 
-    def update_arena_repulsion_field(self, arena_metadata, arena_repulsion_weight):
+    def _arena_step_repulsion_level(self,d_ratio):
+        """
+        Step function: distance expressed as multiples of agent diameter.
+        Returns the repulsion magnitude level (0 to 10^5).
+        """
+        if d_ratio > 6:
+            return 0
+        elif d_ratio > 5:
+            return 10
+        elif d_ratio > 4:
+            return 100
+        elif d_ratio > 3:
+            return 1000
+        elif d_ratio > 2:
+            return 10000
+        else:  # d_ratio <= 2
+            return 100000
+
+
+    def update_arena_repulsion_field(self, arena_metadata,
+                                   agent_diameter):
         """
         Add a negative contribution to the external field for each spin whose
         angular sector overlaps a visible segment of the arena boundary.
-
-        Unlike the previous version, the contribution of each segment is weighted
-        by its angular_width (distance proxy): segments that are closer subtend a
-        larger angle and therefore contribute more repulsion.
-
+        The contribution magnitude follows a step function based on distance,
+        expressed in multiples of agent_diameter:
+            > 6 diam  -> 0
+            5-6 diam  -> 10
+            4-5 diam  -> 100
+            3-4 diam  -> 1000
+            2-3 diam  -> 10000
+            <= 2 diam -> 100000
+        The angular_width weighting is kept to distribute the contribution
+        correctly across overlapping sectors.
         Args:
-            arena_metadata:         list of dicts from visual.py _collect_arena_boundary.
-                                    Required keys: "angle" (rad), "angular_width" (rad)
-            arena_repulsion_weight: total repulsion intensity (configurable from JSON)
+            arena_metadata:          list of dicts from visual.py _collect_arena_boundary.
+                                      Required keys: "angle" (rad), "angular_width" (rad), "distance"
+            arena_repulsion_weight:  scaling factor applied on top of the step level (configurable from JSON)
+            agent_diameter:          diameter of the agent, used to express distance in body-lengths
         """
         if not arena_metadata:
             return
-
         TWO_PI = 2.0 * math.pi
         repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group,
                                    dtype=np.float32)
-
         sector_hw = _PI / self.num_groups
 
         for seg in arena_metadata:
             seg_center = seg["angle"] % TWO_PI
             seg_hw     = seg["angular_width"] / 2.0
+            dist       = max(seg.get("distance", 0.0), 0.0)
 
-            # Contributo pesato per distanza: segmenti vicini (angular_width grande) repellono di più
-            seg_contribution = arena_repulsion_weight * seg["angular_width"] / TWO_PI
+            d_ratio = dist / agent_diameter
+            level = self._arena_step_repulsion_level(d_ratio)
+
+            seg_contribution = (level
+                                 * (seg["angular_width"] / TWO_PI))
 
             seg_min = (seg_center - seg_hw) % TWO_PI
             seg_max = (seg_center + seg_hw) % TWO_PI
             seg_wraps = seg_min > seg_max
-
             for g in range(self.num_groups):
                 sec_center = self.angles[g * self.num_spins_per_group]
                 sec_min = (sec_center - sector_hw) % TWO_PI
                 sec_max = (sec_center + sector_hw) % TWO_PI
                 sec_wraps = sec_min > sec_max
-
                 if not seg_wraps and not sec_wraps:
                     intersects = not (sec_max < seg_min or sec_min > seg_max)
                 elif seg_wraps and not sec_wraps:
@@ -403,12 +431,13 @@ class SpinModule:
                     intersects = (seg_max >= sec_min) or (seg_min <= sec_max)
                 else:
                     intersects = True
-
                 if intersects:
                     start = g * self.num_spins_per_group
                     end   = start + self.num_spins_per_group
                     repulsion_field[start:end] += seg_contribution
 
+        #print("repulsion_field arena", repulsion_field)
+        #print("repulsion_field arena",repulsion_field)
         self.external_field = self.external_field - repulsion_field
 
     def get_states(self):
