@@ -279,18 +279,21 @@ class SpinMovementModel(MovementModel):
         
         # RISISTEMARE
 
-        if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
-            self.spin_system.update_body_repulsion_field(
-                self._last_agent_metadata,
-                repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)),
-            )
+        #if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
+        #    self.spin_system.update_body_repulsion_field(
+        #        self._last_agent_metadata,
+        #        repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)),
+        #    )
+        print(self._last_agent_channel)
+        self.spin_system.update_edge_field(self._last_agent_channel, edge_weight=float(self.spin_model_params.get("edge_weight", 0.8)))
+        self.spin_system.update_body_repulsion_field(self._last_agent_channel, repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)))
 
         # contributo edge                                                   
-        if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
-            self.spin_system.update_edge_field(
-                self._last_agent_metadata,
-                edge_weight=float(self.spin_model_params.get("edge_weight", 0.8))
-            )     
+        #if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
+        #    self.spin_system.update_edge_field(
+        #        self._last_agent_metadata,
+        #        edge_weight=float(self.spin_model_params.get("edge_weight", 0.8))
+        #    )     
         
         if hasattr(self, "_last_arena_metadata") and self._last_arena_metadata is not None:
             self.spin_system.update_arena_repulsion_field(
@@ -355,7 +358,8 @@ class SpinMovementModel(MovementModel):
             return
         if isinstance(snapshot, dict):
             self._last_edge_counts = snapshot.get("edge_counts", None)
-            self._last_agent_metadata = snapshot.get("agent_metadata", None)
+            self._last_agent_channel = snapshot.get("agents",None)
+            #self._last_agent_metadata = snapshot.get("agent_metadata", None)
             self._last_arena_metadata = snapshot.get("arena_metadata", None)
             selected, channel_name = self._select_perception_channel(snapshot)
         else:

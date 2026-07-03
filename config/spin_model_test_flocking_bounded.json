@@ -47,12 +47,12 @@
                     "num_groups":30,
                     "num_spins_per_group": 3,
                     "T": 0.6,
-                    "J": 20,
+                    "J": 5,
                     "nu": 0.4,
                     "task": "flocking",
                     "arena_repulsion_weight": 0.5,
-                    "repulsion_weight": 0.8,
-                    "edge_weight":0.2
+                    "repulsion_weight": 0.9,
+                    "edge_weight":0.1
                 }
             }
         }
