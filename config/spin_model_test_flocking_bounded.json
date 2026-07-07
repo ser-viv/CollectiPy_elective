@@ -15,7 +15,7 @@
             "view": ["detection"]},
         "arenas": {
             "arena_0": {
-                "random_seed": 10,
+                "random_seed": 20,
                 "diameter": 2.0,
                 "_id": "circle",
                 "color": "gray"
@@ -51,8 +51,8 @@
                     "nu": 0.4,
                     "task": "flocking",
                     "arena_repulsion_weight": 0.5,
-                    "repulsion_weight": 0.9,
-                    "edge_weight":0.1
+                    "repulsion_weight": 1,
+                    "edge_weight":1
                 }
             }
         }

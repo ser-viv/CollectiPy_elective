@@ -240,6 +240,10 @@ class SpinMovementModel(MovementModel):
             p_spin_up=float(self.spin_model_params.get("p_spin_up", 0.5)),
             time_delay=int(self.spin_model_params.get("time_delay", 1)),
             dynamics=self.spin_model_params.get("dynamics", "metropolis"),
+            # Guadagno del trasduttore sensoriale: scala il campo esterno
+            # (edge_weight, repulsion_weight) indipendentemente da J.
+            # Default 1.0 per compatibilità con configurazioni esistenti.
+            sensory_gain=float(self.spin_model_params.get("sensory_gain", 1.0)),
         )
 
 
@@ -272,29 +276,22 @@ class SpinMovementModel(MovementModel):
         if self.perception is None or not np.any(self.perception > 0):
             self._run_fallback(tick, arena_shape, objects, agents)
             return
-        # vettore di attivazioni angolari
+        # vettore di attivazioni angolari (baseline grezza, azzerata poi sui
+        # bin di bordo/corpo da update_edge_field / update_body_repulsion_field)
         self.spin_system.update_external_field(self.perception)
 
+        # contributo di attrazione (bordo) e repulsione (corpo): i due
+        # canali sono già occlusion-aware e geometricamente separati da
+        # visual.py, il modello di spin si limita ad applicarli.
+        self.spin_system.update_edge_field(
+            getattr(self, "_last_agent_edge_channel", None),
+            edge_weight=float(self.spin_model_params.get("edge_weight", 0.8)),
+        )
+        self.spin_system.update_body_repulsion_field(
+            getattr(self, "_last_agent_body_channel", None),
+            repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)),
+        )
 
-        
-        # RISISTEMARE
-
-        #if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
-        #    self.spin_system.update_body_repulsion_field(
-        #        self._last_agent_metadata,
-        #        repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)),
-        #    )
-        print(self._last_agent_channel)
-        self.spin_system.update_edge_field(self._last_agent_channel, edge_weight=float(self.spin_model_params.get("edge_weight", 0.8)))
-        self.spin_system.update_body_repulsion_field(self._last_agent_channel, repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)))
-
-        # contributo edge                                                   
-        #if hasattr(self, "_last_agent_metadata") and self._last_agent_metadata is not None:
-        #    self.spin_system.update_edge_field(
-        #        self._last_agent_metadata,
-        #        edge_weight=float(self.spin_model_params.get("edge_weight", 0.8))
-        #    )     
-        
         if hasattr(self, "_last_arena_metadata") and self._last_arena_metadata is not None:
             self.spin_system.update_arena_repulsion_field(
                 self._last_arena_metadata,
@@ -358,12 +355,20 @@ class SpinMovementModel(MovementModel):
             return
         if isinstance(snapshot, dict):
             self._last_edge_counts = snapshot.get("edge_counts", None)
-            self._last_agent_channel = snapshot.get("agents",None)
+            self._last_agent_channel = snapshot.get("agents", None)
+            # Canali già occlusion-aware e geometricamente separati,
+            # calcolati in visual.py (VisualDetectionModel._collect_agent_targets):
+            # NON vanno ricostruiti qui, solo applicati così come sono.
+            self._last_agent_edge_channel = snapshot.get("agent_edge_channel", None)
+            self._last_agent_body_channel = snapshot.get("agent_body_channel", None)
             #self._last_agent_metadata = snapshot.get("agent_metadata", None)
             self._last_arena_metadata = snapshot.get("arena_metadata", None)
             selected, channel_name = self._select_perception_channel(snapshot)
         else:
             self._last_edge_counts = None
+            self._last_agent_channel = None
+            self._last_agent_edge_channel = None
+            self._last_agent_body_channel = None
             self._last_agent_metadata = None
             self._last_arena_metadata = None
             selected, channel_name = snapshot, "raw"
@@ -426,7 +431,18 @@ class SpinMovementModel(MovementModel):
             return None
         if not isinstance(snapshot, dict):
             return snapshot
-        if all(isinstance(v, np.ndarray) for v in snapshot.values() if v is not None):
+        # VisualDetectionModel.sense() (visual.py) ritorna già tutti i
+        # canali pronti (ndarray) più alcune liste di metadati
+        # (agent_metadata, arena_metadata: liste di dict). Queste ultime
+        # non sono np.ndarray, quindi vanno accettate esplicitamente come
+        # "già pronte" per non far scattare inutilmente la conversione via
+        # perception_model.build_channels, che è pensata per backend di
+        # detection diversi che restituiscono dati grezzi non ancora
+        # trasformati in canali.
+        def _is_prebuilt(value):
+            return value is None or isinstance(value, (np.ndarray, list))
+
+        if all(_is_prebuilt(v) for v in snapshot.values()):
             return snapshot
         if self.perception_model is None:
             return None

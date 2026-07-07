@@ -31,9 +31,23 @@ class SpinModule:
         p_spin_up: float = 0.5,
         time_delay: int = 1,
         dynamics: str = 'metropolis',
-        max_perceived_agents: int = 4
+        max_perceived_agents: int = 4,
+        sensory_gain: float = 1.0
     ):
-        """Initialize the flocking spin system instance."""
+        """Initialize the flocking spin system instance.
+
+        Args:
+            J: regola ESCLUSIVAMENTE la dinamica interna di accoppiamento
+                fra gli spin (il termine di interazione dell'Hamiltoniana).
+                Non entra nel campo esterno sensoriale.
+            sensory_gain: guadagno del trasduttore sensoriale, definito a
+                livello di sistema per l'agente. E' il fattore che dà la
+                giusta energia fisica al campo esterno (edge/repulsion)
+                rispetto al rumore termico T, in modo che i pesi di
+                configurazione (edge_weight, repulsion_weight) possano
+                restare percentuali adimensionali in [0, 1]. Vedi
+                update_edge_field / update_body_repulsion_field.
+        """
         self.random_generator = random_generator
         self.num_groups = num_groups
         self.num_spins_per_group = num_spins_per_group
@@ -47,6 +61,10 @@ class SpinModule:
         self.history_length = time_delay
         self.dynamics = dynamics
         self.global_inhibition = global_inhibition
+        # Guadagno del trasduttore sensoriale: scala il campo esterno
+        # (edge_weight, repulsion_weight) indipendentemente da J, che
+        # riguarda solo l'accoppiamento interno fra spin.
+        self.sensory_gain = sensory_gain
         group_angles = np.linspace(0, 2 * _PI, num_groups, endpoint=False)
         self.angles = np.repeat(group_angles, self.num_spins_per_group)
         self._unit_angle_vectors = np.exp(1j * self.angles)
@@ -90,6 +108,30 @@ class SpinModule:
         """Set the probability of spin up."""
         self.p_spin_up = p_spin_up
 
+    def set_sensory_gain(self, sensory_gain: float):
+        """
+        Imposta il guadagno del trasduttore sensoriale usato da
+        update_edge_field / update_body_repulsion_field per scalare il
+        campo esterno. Indipendente da J (che regola solo l'accoppiamento
+        interno fra spin).
+        """
+        self.sensory_gain = sensory_gain
+
+    @staticmethod
+    def _validate_percentage_weight(weight, name):
+        """
+        I pesi di configurazione (edge_weight, repulsion_weight) sono
+        percentuali adimensionali e devono restare in [0, 1]: l'energia
+        fisica va data tramite sensory_gain, non alterando questo range.
+        """
+        if not (0.0 <= weight <= 1.0):
+            raise ValueError(
+                f"{name} deve essere una percentuale adimensionale in [0, 1], "
+                f"ricevuto {weight}. Per aumentare l'intensità del segnale "
+                f"usa sensory_gain (set_sensory_gain), non {name}."
+            )
+
+
     def calculate_hamiltonian(self, state):
         """
         Calculate the Hamiltonian H = -[1/Ns * Σ Jij σi σj + Σ hi σi - hb Σ σi]
@@ -111,7 +153,7 @@ class SpinModule:
         # global inhibition term: -hb Σ σi
         global_inhibition_contribution = self.global_inhibition * np.sum(state_pm1_flat)
 
-        print("H_spin_interactions,external_field_contribution",H_spin_interactions,external_field_contribution)
+        #print("H_spin_interactions,external_field_contribution",H_spin_interactions,external_field_contribution)
         return H_spin_interactions + external_field_contribution - global_inhibition_contribution
 
     def step(self, timedelay=True, dt=0.1, tau=33):
@@ -222,132 +264,92 @@ class SpinModule:
         """Update the external field from perception."""
         self.external_field = np.asarray(perceptual_outputs, dtype=np.float32)
 
-    def _get_agent_sectors(self, agent_channel):
+    def _zero_background_on(self, mask):
         """
-        Given the binary agent channel (length = num_groups * num_spins_per_group),
-        aggregates per group and returns a list of contiguous blobs, each blob being
-        a list of consecutive group indices where at least one agent is perceived.
-        Handles circular wrap-around (e.g. a blob spanning groups 28,29,0,1).
+        Azzera il segnale di background visivo grezzo (la baseline +1.0
+        caricata da update_external_field su tutta la sagoma dell'agente)
+        sui bin indicati da `mask`, PRIMA di applicare pesi e guadagni.
 
-        Example with num_groups=15:
-            channel → [0,1,0,0,1,1,0,0,0,1,1,1,1,0,0]  (one value per group)
-            returns  → [[1], [4,5], [9,10,11,12]]
+        Senza questo azzeramento, il campo di repulsione parte da +1.0
+        invece che da 0: sottraendo un contributo pesato non riuscirebbe
+        quasi mai a farlo scendere sotto zero (repulsivo), perché deve
+        prima "consumare" la baseline positiva. Allo stesso modo
+        l'attrazione si somme­rebbe alla baseline invece di sostituirla,
+        gonfiando artificialmente il segnale.
         """
-        n = self.num_groups
+        if mask is None:
+            return
+        mask = np.asarray(mask, dtype=bool)
+        if mask.shape != self.external_field.shape:
+            return
+        if np.any(mask):
+            self.external_field[mask] = 0.0
 
-        # Step 1: collapse num_spins_per_group entries into one boolean per group
-        active = []
-        for g in range(n):
-            start = g * self.num_spins_per_group
-            end   = start + self.num_spins_per_group
-            if np.any(np.asarray(agent_channel[start:end]) > 0):
-                active.append(g)
-
-        if not active:
-            return []
-
-        # Step 2: find contiguous runs (linear)
-        groups = []
-        current = [active[0]]
-        for i in range(1, len(active)):
-            if active[i] == active[i - 1] + 1:
-                current.append(active[i])
-            else:
-                groups.append(current)
-                current = [active[i]]
-        groups.append(current)
-
-        # Step 3: merge wrap-around (last group ends at n-1, first group starts at 0)
-        if len(groups) > 1 and groups[-1][-1] == n - 1 and groups[0][0] == 0:
-            merged = groups[-1] + groups[0]   # angularly contiguous across 0
-            groups = [merged] + groups[1:-1]
-
-        return groups  # list of lists of group indices
-
-    def update_edge_field(self, agent_channel, edge_weight):
+    def update_edge_field(self, edge_channel, edge_weight):
         """
-        Positive contribution toward the two edge sectors of each perceived agent blob.
-        Edge sectors are the first and last group index of each contiguous blob.
-        Contribution is proportional to the blob's angular width (blob_length / num_groups),
-        scaled by J so that edge_weight lives on the same scale as the spin coupling.
+        Contributo positivo (attrazione) sugli spin marcati come bordo reale
+        e sopravvissuto all'occlusione in `edge_channel`.
+
+        `edge_channel` viene calcolato in visual.py durante la proiezione
+        ottica con occlusione tipo z-buffer e con la geometria bordo/corpo
+        già risolta (spessore di bordo sub-lineare, occlusione a livello di
+        settore): contiene 1 solo sui settori che sono bordo vero E
+        sopravvissuto. Il modello di spin si limita ad applicarlo, non deve
+        ricostruire più nulla.
+
+        Prima di applicare il peso e il guadagno, azzera la baseline
+        visiva grezza sui bin di bordo (vedi `_zero_background_on`), così
+        il contributo di attrazione sostituisce il segnale grezzo invece di
+        sommarsi ad esso.
+
+        `edge_weight` è una percentuale adimensionale in [0, 1]: la scala
+        fisica del contributo (rispetto al rumore termico T) è data da
+        `self.sensory_gain`, NON da J — J riguarda solo l'accoppiamento
+        interno fra spin, non l'input sensoriale.
         """
-        if agent_channel is None:
+        if edge_channel is None:
             return
 
-        blobs = self._get_agent_sectors(agent_channel)
-        if not blobs:
-            return
-        #print("lunghezza blobs attrazione",len(blobs))
+        self._validate_percentage_weight(edge_weight, "edge_weight")
 
-        TWO_PI       = 2.0 * math.pi
-        sector_width = TWO_PI / self.num_groups          # angular size of one group
+        edge_channel = np.asarray(edge_channel, dtype=np.float32)
+        if not np.any(edge_channel):
+            return
         
-        eff_weight   = edge_weight#* self.J           # scale relative to J
-        edge_field = np.zeros(self.num_groups * self.num_spins_per_group, dtype=np.float32)
-        print("edge_weight,eff_weight,J",edge_weight,eff_weight,self.J)
-        for blob in clusters:
-            n_body = len(blob)
-            blob_angular_width = len(blob) * sector_width          # in radians
-            contribution = eff_weight * blob_angular_width / TWO_PI# / 2  # = eff_weight * len(blob)/num_groups
+        self._zero_background_on(edge_channel > 0)
+        self.external_field = self.external_field + self.sensory_gain * edge_weight * edge_channel
 
-            
-            
-            edge_sectors = [blob[0]] if len(blob) == 1 else [blob[0], blob[-1]]
-            for g in edge_sectors:
-                start = g * self.num_spins_per_group
-                end   = start + self.num_spins_per_group
-                edge_field[start:end] += contribution
-            print("edge attraction contribution", edge_field)
-
-        #print("edge attraction contribution", edge_field)
-        self.external_field = self.external_field + edge_field
-
-    def update_body_repulsion_field(self, agent_channel, repulsion_weight):
+    def update_body_repulsion_field(self, body_channel, repulsion_weight):
         """
-        Negative contribution from the inner body sectors of each perceived agent blob.
-        Body sectors are all group indices between the two edges (excluded).
-        A blob must occupy >= 3 groups to have any body.
-        Contribution is per-blob (not per-sector), distributed evenly across body sectors,
-        so that the total repulsion per agent doesn't grow with the number of sectors.
-        Scaled by J for consistency with edge_weight.
+        Contributo negativo (repulsione) sugli spin marcati come corpo
+        visibile in `body_channel`.
+
+        `body_channel` viene calcolato in visual.py: contiene 1 su tutti i
+        settori occupati dal corpo VISIBILE di un agente (dopo occlusione e
+        dopo la separazione geometrica bordo/corpo), bordi veri esclusi.
+        Il modello di spin si limita ad applicarlo.
+
+        Prima di applicare il peso e il guadagno, azzera la baseline
+        visiva grezza sui bin di corpo (vedi `_zero_background_on`): senza
+        questo passaggio la sottrazione partirebbe da +1.0 (la baseline
+        caricata da update_external_field su tutta la sagoma) e non
+        riuscirebbe quasi mai a portare il campo sotto zero, cioè la
+        repulsione non diventerebbe mai effettivamente negativa.
+
+        `repulsion_weight` è una percentuale adimensionale in [0, 1]: la
+        scala fisica del contributo è data da `self.sensory_gain`, NON da J.
         """
-        if agent_channel is None:
+        if body_channel is None:
             return
 
-        blobs = self._get_agent_sectors(agent_channel)
-        if not blobs:
+        self._validate_percentage_weight(repulsion_weight, "repulsion_weight")
+
+        body_channel = np.asarray(body_channel, dtype=np.float32)
+        if not np.any(body_channel):
             return
 
-        print("lunghezza blobs repulsione",len(blobs))
-        TWO_PI       = 2.0 * math.pi
-        sector_width = TWO_PI / self.num_groups
-        eff_weight   = repulsion_weight#* self.J
-        print("edge_weight,eff_weight,J",repulsion_weight,eff_weight,self.J)
-        repulsion_field = np.zeros(self.num_groups * self.num_spins_per_group, dtype=np.float32)
-
-        for blob in blobs:
-            if len(blob) <= 2:
-                continue                                   # no inner body
-            
-            print("blobs repulsione",blob)
-            body_sectors = blob[1:-1]
-            #body_sectors = blob
-            n_body       = len(body_sectors)
-            print("blobs repulsione dopo aver levato esterni",body_sectors)
-            blob_angular_width = len(blob) * sector_width
-            # Total contribution for this blob, divided evenly across body sectors
-            print("eff_weight, blob_angular_width, n_body",eff_weight,blob_angular_width/TWO_PI,n_body)
-
-            contribution = eff_weight * blob_angular_width / TWO_PI# / n_body
-            
-            for g in body_sectors:
-                start = g * self.num_spins_per_group
-                end   = start + self.num_spins_per_group
-                repulsion_field[start:end] += contribution
-            print("body repulsion contribution", repulsion_field)
-
-        #print("body repulsion contribution", repulsion_field)
-        self.external_field = self.external_field - repulsion_field
+        self._zero_background_on(body_channel > 0)
+        self.external_field = self.external_field - self.sensory_gain * repulsion_weight * body_channel
 
 
     def _arena_step_repulsion_level(self,d_ratio):
