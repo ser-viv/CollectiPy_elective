@@ -3,19 +3,16 @@
     "environment": {
         "collisions": false,
         "ticks_per_second": 5,
-        "time_limit":4000,
-        "num_runs": 100,
-        "results": {
-            "base_path": "./data/",
-            "agent_specs": ["base", "spin_model"],
-            "snapshots_per_second": 1
+        "time_limit":1800,
+        "num_runs": 1,
+        "gui":{
+        "_id": "2D",
+        "on_click": ["spins","detection"],
+        "view": ["detection"]
         },
-        "gui":{"_id": "2D",
-            "on_click": ["spins", "detection"],
-            "view": ["detection"]},
         "arenas": {
             "arena_0": {
-                "random_seed": 20,
+                "random_seed": 15,
                 "diameter": 2.0,
                 "_id": "circle",
                 "color": "gray"
@@ -46,13 +43,13 @@
                     "v0": 0.08,
                     "num_groups":30,
                     "num_spins_per_group": 3,
-                    "T": 0.6,
+                    "T": 0.1,
                     "J": 5,
                     "nu": 0.4,
                     "task": "flocking",
                     "arena_repulsion_weight": 0.5,
-                    "repulsion_weight": 1,
-                    "edge_weight":1
+                    "repulsion_weight": 1.0,
+                    "edge_weight":1.0
                 }
             }
         }

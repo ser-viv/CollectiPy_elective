@@ -202,23 +202,38 @@ class VisualDetectionModel(DetectionModel):
         e usata SOLO per dirimere questo conflitto fra settori condivisi, non
         per un ordinamento/taglio geometrico continuo su tutta la scena).
 
-        La transizione fra attrazione (bordo) e repulsione (corpo) è
-        puramente geometrica, non basata su pesi: lo spessore del bordo, in
-        settori, cresce sub-linearmente (radice quadrata) rispetto alla
-        larghezza angolare totale L della sagoma (anch'essa espressa in
-        settori). Così da lontano (L piccola) i bordi occupano quasi tutta
-        la sagoma, mentre da vicino (L grande) il bordo cresce più lentamente
-        di L e lo spazio centrale per il corpo diventa dominante. Un vincolo
-        geometrico garantisce sempre almeno 1 settore centrale di corpo (e
-        quindi almeno 3 settori totali), anche alla massima distanza di
-        percezione: vedi `_own_footprint_groups` e `_edge_thickness`.
+        La transizione fra attrazione (bordo) e repulsione (corpo) dipende
+        ORA solo dal numero di settori L occupati dall'impronta NON occlusa
+        dell'agente (`_own_footprint_groups`), secondo tre casi geometrici
+        (nessuna dipendenza esplicita dalla distanza al di fuori del suo
+        effetto su L, e nessuna scala sub-lineare né vincolo di corpo minimo
+        forzato):
+
+          - Caso 1 (agente molto lontano): L == 1. L'arco percepito rientra
+            in un unico settore, che è interamente un settore di attrazione.
+            Nessun corpo/repulsione.
+          - Caso 2 (agente lontano, non quanto il Caso 1): L == 2. L'arco è
+            suddiviso in due settori, ENTRAMBI di attrazione. Nessun corpo.
+          - Caso 3 (agente vicino/molto vicino): L >= 3. L'arco è suddiviso
+            in L settori (3 se non troppo vicino, fino a 5-7 se molto
+            vicino). I DUE settori estremi dell'arco sono di attrazione,
+            tutti i restanti (L - 2) settori centrali sono di repulsione.
+
+        Lo spessore di bordo è quindi sempre fisso a 1 settore per lato
+        (vedi `_edge_thickness`): per L <= 2 questo produce naturalmente
+        "tutta l'impronta è bordo" (Caso 1 e 2), per L >= 3 produce "solo i
+        due estremi sono bordo" (Caso 3).
 
         Un settore conta come bordo attrattivo di un agente SOLO se rientra
         nello spessore di bordo così calcolato E se sopravvive all'occlusione
         (nessun agente più vicino l'ha già occupato). Un settore "perso" per
         occlusione non genera mai un bordo attrattivo artificiale al suo
         posto: se il settore sopravvive ma non è nello spessore di bordo,
-        conta semplicemente come corpo/repulsione.
+        conta semplicemente come corpo/repulsione. La classificazione
+        edge/body di ciascun settore è decisa sull'impronta ORIGINALE
+        (pre-occlusione) e poi solo filtrata sui settori sopravvissuti: un
+        agente il cui unico settore body sopravvive ma i cui edge sono
+        occlusi contribuirà quindi solo repulsione, e viceversa.
         """
         TWO_PI = 2.0 * math.pi
         targets = []
@@ -294,10 +309,10 @@ class VisualDetectionModel(DetectionModel):
                 # tutti i suoi settori: invisibile, nessun contributo.
                 continue
 
-            # Spessore di bordo (in settori) calcolato geometricamente sulla
-            # larghezza totale L della sagoma NON occlusa: sub-lineare
-            # (radice quadrata), clampato per garantire sempre >= 1 settore
-            # centrale di corpo.
+            # Spessore di bordo (in settori, per lato): SEMPRE 1, indipendente
+            # da L e dalla distanza (vedi `_edge_thickness`). Per L <= 2
+            # questo copre l'intera impronta (Caso 1 e 2, tutta attrazione);
+            # per L >= 3 copre solo i due settori estremi (Caso 3).
             L = len(own_groups)
             w = self._edge_thickness(L)
             true_edge_groups = set(own_groups[:w]) | set(own_groups[-w:])
@@ -335,26 +350,33 @@ class VisualDetectionModel(DetectionModel):
 
     def _edge_thickness(self, L):
         """
-        Spessore di bordo (in settori, per lato) in funzione della larghezza
-        angolare totale della sagoma L (anch'essa in settori).
+        Spessore di bordo (in settori, per lato): SEMPRE fisso a 1 settore,
+        indipendentemente da L (larghezza angolare totale della sagoma
+        dell'agente osservato, in settori) e quindi dalla sua distanza.
 
-        Cresce come sqrt(L) — sub-lineare rispetto a L — così che il
-        rapporto bordo/L diminuisca (e quindi il corpo diventi via via più
-        dominante) al crescere di L, cioè avvicinandosi all'agente osservato.
+        Con w=1, combinato con `own_groups[:w]` e `own_groups[-w:]` in
+        `_collect_agent_targets`:
+          - L == 1 (Caso 1, agente molto lontano): il primo e l'ultimo
+            elemento coincidono con l'unico settore dell'impronta, quindi
+            l'intero (unico) settore è attrazione. Nessun corpo.
+          - L == 2 (Caso 2, agente lontano): i due settori dell'impronta
+            sono, rispettivamente, il "primo" e l'"ultimo" elemento, quindi
+            ENTRAMBI risultano attrazione. Nessun corpo.
+          - L >= 3 (Caso 3, agente vicino/molto vicino): solo i due settori
+            estremi dell'impronta sono attrazione; i restanti (L - 2)
+            settori centrali sono repulsione (corpo). Più l'agente è
+            vicino, più L cresce, e quindi cresce il numero di settori di
+            repulsione centrali.
 
-        E' sempre clampato in [1, floor((L-1)/2)] per garantire almeno 1
-        settore centrale di corpo (quindi almeno 3 settori totali): questo è
-        il vincolo geometrico richiesto anche al limite di L minima (che
-        `_own_footprint_groups` garantisce essere >= 3).
+        Nessuna scala sub-lineare (era sqrt(L)) e nessun clamp che
+        garantisse un corpo minimo forzato: la vecchia estensione forzata
+        dell'impronta a un minimo di 3 settori (`_extend_footprint`) è
+        stata rimossa da `_own_footprint_groups` proprio perché generava un
+        body artificiale anche a distanze in cui l'agente osservato
+        dovrebbe produrre solo attrazione (Caso 1 e 2), impedendo la
+        polarizzazione nel flocking.
         """
-        if L <= 2:
-            # Caso degenere (possibile solo se num_groups < 3): non c'è
-            # spazio per separare bordo e corpo, tutto conta come bordo.
-            return max(1, L)
-
-        max_w = (L - 1) // 2  # lascia sempre >= 1 settore centrale
-        w = math.floor(math.sqrt(L))
-        return max(1, min(w, max_w))
+        return 1
 
     def _increment_groups(self, edge_counts, groups):
         """Incrementa di 1 gli slot degli spin corrispondenti ai gruppi indicati."""
@@ -465,20 +487,32 @@ class VisualDetectionModel(DetectionModel):
         di un agente (obj_min, obj_max), PRIMA di qualunque occlusione,
         ordinata circolarmente dal settore di obj_min a quello di obj_max
         (gestisce il wrap-around a 2*pi). Il primo e l'ultimo elemento sono
-        i due settori-bordo veri di questo agente.
+        i due settori-bordo veri di questo agente (o l'unico settore, se
+        L == 1).
 
         La sagoma di un singolo agente è per costruzione un unico arco
         contiguo (corpo circolare), quindi basta camminare in avanti di
         settore in settore dal bordo sinistro fino a raggiungere il bordo
         destro.
 
-        Vincolo geometrico: la sagoma deve occupare SEMPRE almeno 3 settori
-        (2 di bordo + almeno 1 centrale di corpo), anche alla massima
-        distanza di percezione, dove l'ampiezza angolare reale potrebbe
-        essere più piccola di 3 settori. In quel caso la sagoma viene
-        estesa simmetricamente attorno al proprio centro (vedi
-        `_extend_footprint`), così l'attrazione non può mai "sovrastare"
-        completamente la repulsione per mancanza di spazio.
+        La lunghezza risultante L = len(ordered) riflette fedelmente
+        l'ampiezza angolare reale percepita (nessuna estensione artificiale
+        viene più applicata):
+
+          - L == 1: agente molto lontano (Caso 1) — un unico settore,
+            interamente di attrazione (vedi `_edge_thickness`).
+          - L == 2: agente lontano (Caso 2) — due settori, entrambi di
+            attrazione.
+          - L >= 3: agente vicino/molto vicino (Caso 3) — i due settori
+            estremi sono di attrazione, i restanti (L - 2) di repulsione.
+
+        In precedenza, quando L < 3, l'impronta veniva estesa
+        simmetricamente a un minimo di 3 settori per garantire sempre
+        almeno 1 settore centrale di corpo. Questa estensione è stata
+        rimossa su richiesta esplicita: generava un corpo artificiale anche
+        a grande distanza, dove invece l'agente dovrebbe produrre solo
+        attrazione, impedendo la polarizzazione nel flocking (alta
+        coesione, bassa polarizzazione osservata nelle simulazioni).
         """
         TWO_PI = 2.0 * math.pi
         all_groups = set(self._groups_intersecting_interval(obj_min, obj_max))
@@ -496,44 +530,6 @@ class VisualDetectionModel(DetectionModel):
             if len(ordered) == len(all_groups):
                 break
             g = (g + 1) % self.num_groups
-
-        if len(ordered) < 3:
-            ordered = self._extend_footprint(ordered, min_len=3)
-
-        return ordered
-
-    def _extend_footprint(self, ordered, min_len):
-        """
-        Estende simmetricamente (alternando lato sinistro e destro) una
-        sagoma circolare contigua `ordered` fino a raggiungere `min_len`
-        settori, senza mai superare il numero totale di settori disponibili
-        (`self.num_groups`) né duplicare un settore già incluso (wrap-around
-        completo).
-        """
-        if not ordered:
-            return ordered
-
-        ordered   = list(ordered)
-        n         = self.num_groups
-        target    = min(min_len, n)
-        extend_left = True
-
-        while len(ordered) < target:
-            if extend_left:
-                candidate = (ordered[0] - 1) % n
-            else:
-                candidate = (ordered[-1] + 1) % n
-
-            if candidate in ordered:
-                # l'intero cerchio è già coperto: non si può estendere di più
-                break
-
-            if extend_left:
-                ordered.insert(0, candidate)
-            else:
-                ordered.append(candidate)
-
-            extend_left = not extend_left
 
         return ordered
 
