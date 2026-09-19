@@ -215,6 +215,10 @@ class SpinMovementModel(MovementModel):
             "perception_global_inhibition": self.global_inhibition,
             "max_detection_distance": self.perception_range,
             "detection_config": getattr(self.agent, "detection_config", {}),
+            "align_enabled": float(self.spin_model_params.get("align_weight", 0.0)) > 0.0,
+            "align_kappa":   float(self.spin_model_params.get("align_kappa", 4.0)),
+            "align_source":  str(self.spin_model_params.get("align_source", "flow")).lower(),
+            "flow_lag":      int(self.spin_model_params.get("flow_lag", 10)),
         }
         detection_name = getattr(self.agent, "detection", None)
         if not detection_name:
@@ -245,6 +249,8 @@ class SpinMovementModel(MovementModel):
             # Default 1.0 per compatibilità con configurazioni esistenti.
             sensory_gain=float(self.spin_model_params.get("sensory_gain", 1.0)),
         )
+        if getattr(self, "detection_model", None) is not None and hasattr(self.detection_model, "reset_flow"):
+            self.detection_model.reset_flow()
 
 
     # stabilizza lo spin system 
@@ -290,6 +296,11 @@ class SpinMovementModel(MovementModel):
         self.spin_system.update_body_repulsion_field(
             getattr(self, "_last_agent_body_channel", None),
             repulsion_weight=float(self.spin_model_params.get("repulsion_weight", 0.1)),
+        )
+
+        self.spin_system.update_alignment_field(
+            getattr(self, "_last_agent_heading_channel", None),
+            align_weight=float(self.spin_model_params.get("align_weight", 0.0)),
         )
 
         if hasattr(self, "_last_arena_metadata") and self._last_arena_metadata is not None:
@@ -361,6 +372,7 @@ class SpinMovementModel(MovementModel):
             # NON vanno ricostruiti qui, solo applicati così come sono.
             self._last_agent_edge_channel = snapshot.get("agent_edge_channel", None)
             self._last_agent_body_channel = snapshot.get("agent_body_channel", None)
+            self._last_agent_heading_channel = snapshot.get("agent_heading_channel", None)
             #self._last_agent_metadata = snapshot.get("agent_metadata", None)
             self._last_arena_metadata = snapshot.get("arena_metadata", None)
             selected, channel_name = self._select_perception_channel(snapshot)
@@ -371,6 +383,7 @@ class SpinMovementModel(MovementModel):
             self._last_agent_body_channel = None
             self._last_agent_metadata = None
             self._last_arena_metadata = None
+            self._last_agent_heading_channel = None
             selected, channel_name = snapshot, "raw"
         self.perception = selected
         self._active_perception_channel = channel_name

@@ -27,7 +27,7 @@
                 "shape": "cylinder",
                 "diameter": 0.033,
                 "height": 0.02,
-                "max_absolute_velocity": 0.1,
+                "max_linear_velocity": 0.01,
                 "max_angular_velocity": 40.0,
                 "color": "blue",
                 "detection": {
@@ -48,8 +48,13 @@
                     "nu": 0.4,
                     "task": "flocking",
                     "arena_repulsion_weight": 0.5,
-                    "repulsion_weight": 1.0,
-                    "edge_weight":1.0
+                    "repulsion_weight": 0.3,
+                    "edge_weight":0.8,
+                    "align_weight": 0.5, 
+                    "align_kappa": 4.0,
+                    "align_source": "flow", 
+                    "flow_lag": 10,
+                    "constant_speed": true
                 }
             }
         }

@@ -351,6 +351,19 @@ class SpinModule:
         self._zero_background_on(body_channel > 0)
         self.external_field = self.external_field - self.sensory_gain * repulsion_weight * body_channel
 
+    def update_alignment_field(self, heading_channel, align_weight):
+        """
+        Contributo positivo sui bin centrati sugli heading dei vicini visibili.
+        `align_weight` è una percentuale adimensionale in [0, 1]; la scala fisica
+        è data da sensory_gain, come per edge/repulsion.
+        """
+        if heading_channel is None or align_weight == 0.0:
+            return
+        self._validate_percentage_weight(align_weight, "align_weight")
+        heading_channel = np.asarray(heading_channel, dtype=np.float32)
+        if not np.any(heading_channel):
+            return
+        self.external_field = self.external_field + self.sensory_gain * align_weight * heading_channel
 
     def _arena_step_repulsion_level(self,d_ratio):
         """

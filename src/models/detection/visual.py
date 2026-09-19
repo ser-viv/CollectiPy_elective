@@ -1,6 +1,7 @@
 import logging
 import math
 import numpy as np
+from collections import deque 
 from core.configuration.plugin_base import DetectionModel
 from core.configuration.plugin_registry import register_detection_model
 from models.utility_functions import normalize_angle
@@ -53,6 +54,15 @@ class VisualDetectionModel(DetectionModel):
         # Configurabile via context: "num_boundary_samples"
         self.num_boundary_samples = int(context.get("num_boundary_samples", 36))
 
+        # --- canale di allineamento ---
+        self.align_enabled = bool(context.get("align_enabled", False))
+        self.align_kappa   = float(context.get("align_kappa", 4.0))
+        self.align_source  = str(context.get("align_source", "flow")).lower()   # "flow" | "heading"
+        self.flow_lag      = max(1, int(context.get("flow_lag", 10)))           # in campioni di sense()
+        self._spin_angles  = np.repeat(np.asarray(self.group_angles, dtype=float),
+                                    self.num_spins_per_group)
+        self._obs_hist     = {}   # nome vicino -> deque[(phi, w, own_x, own_y_invertita)]
+
         min_width = 2 * math.pi / self.num_groups
         if self.perception_width < min_width:
             logger.warning(
@@ -75,6 +85,7 @@ class VisualDetectionModel(DetectionModel):
         # venga persa nell'unione binaria del canale.
         agent_edge_channel = np.zeros(channel_size)
         agent_body_channel = np.zeros(channel_size)
+        agent_heading_channel = np.zeros(channel_size)
         agent_metadata = []
         arena_metadata = []
 
@@ -85,6 +96,7 @@ class VisualDetectionModel(DetectionModel):
             edge_counts, agent_metadata,
             edge_channel=agent_edge_channel,
             body_channel=agent_body_channel,
+            heading_channel=agent_heading_channel,
         )
         self._collect_object_targets(object_channel, objects)
 
@@ -109,6 +121,7 @@ class VisualDetectionModel(DetectionModel):
             "agent_body_channel": agent_body_channel,
             "agent_metadata":     agent_metadata,
             "arena_metadata":     arena_metadata,
+            "agent_heading_channel": agent_heading_channel,
         }
 
     def _collect_arena_boundary(self, object_channel, arena_shape, arena_metadata):
@@ -187,8 +200,9 @@ class VisualDetectionModel(DetectionModel):
             })
 
     def _collect_agent_targets(self, perception, agents, hierarchy,
-                                edge_counts, agent_metadata,
-                                edge_channel=None, body_channel=None):
+                            edge_counts, agent_metadata,
+                            edge_channel=None, body_channel=None,
+                            heading_channel=None):
         """
         Raccoglie i bersagli-agente e ne calcola la proiezione angolare con
         occlusione risolta a livello di settore discreto (lo stesso settore
@@ -277,6 +291,8 @@ class VisualDetectionModel(DetectionModel):
 
                 half_subt = math.atan(radius / max(distance, 1e-6))
 
+                name = target_name or f"{club}_{n}"
+                heading = self._estimate_heading(name, meta, angle_rad, 2 * half_subt)
                 targets.append({
                     "name":          target_name or f"{club}_{n}",
                     "angle":         angle_rad,
@@ -284,6 +300,7 @@ class VisualDetectionModel(DetectionModel):
                     "obj_min":       angle_rad - half_subt,
                     "obj_max":       angle_rad + half_subt,
                     "angular_width": 2 * half_subt,
+                    "heading": heading,
                 })
 
         # --- Occlusione a livello di settore: dal più vicino al più lontano.
@@ -292,6 +309,8 @@ class VisualDetectionModel(DetectionModel):
         # quel settore se non è il più vicino dei due.
         targets.sort(key=lambda t: t["distance"])
         claimed = set()
+
+        n_visible = 0
 
         for t in targets:
             own_groups = self._own_footprint_groups(t["obj_min"], t["obj_max"])
@@ -308,6 +327,10 @@ class VisualDetectionModel(DetectionModel):
                 # Completamente allineato dietro un agente più vicino su
                 # tutti i suoi settori: invisibile, nessun contributo.
                 continue
+
+            n_visible += 1
+            if heading_channel is not None and t["heading"] is not None:
+                self._add_heading_bump(heading_channel, t["heading"])
 
             # Spessore di bordo (in settori, per lato): SEMPRE 1, indipendente
             # da L e dalla distanza (vedi `_edge_thickness`). Per L <= 2
@@ -346,7 +369,11 @@ class VisualDetectionModel(DetectionModel):
                 "survived_groups":      survived,
                 "edge_groups_survived": sorted(edge_groups_survived),
                 "body_groups_survived": sorted(body_groups_survived),
+                "heading_est": t["heading"],
             })
+
+        if heading_channel is not None and n_visible > 0:
+            heading_channel /= n_visible
 
     def _edge_thickness(self, L):
         """
@@ -377,6 +404,55 @@ class VisualDetectionModel(DetectionModel):
         polarizzazione nel flocking.
         """
         return 1
+    
+    def reset_flow(self):
+        """Azzera la memoria del flusso ottico (nuovo run)."""
+        self._obs_hist = {}
+
+    def _add_heading_bump(self, channel, heading):
+        """Bump von Mises centrato su `heading` (rad, frame del ring)."""
+        channel += np.exp(self.align_kappa * (np.cos(self._spin_angles - heading) - 1.0))
+
+    def _estimate_heading(self, name, meta, phi, w):
+        """Heading del vicino nel frame del ring, o None se non disponibile."""
+        if not self.align_enabled:
+            return None
+        if self.align_source == "heading":
+            oz = meta.get("orientation_z")
+            return None if oz is None else math.radians(oz) % (2.0 * math.pi)
+        p = self.agent.position
+        h = self._obs_hist.get(name)
+        if h is None:
+            h = self._obs_hist[name] = deque(maxlen=self.flow_lag + 1)
+        # frame del ring: (x, -y), coerente con angle_world = atan2(-dy, dx)
+        h.append((phi, w, p.x, -p.y))
+        return self._flow_heading(h)
+
+    def _flow_heading(self, hist):
+        """Stima dell'heading dal moto visivo (bearing + ampiezza angolare), senza distanza."""
+        if len(hist) <= self.flow_lag:
+            return None
+        phi0, w0, x0, y0 = hist[0]
+        phi1, w1, x1, y1 = hist[-1]
+        dphi = (phi1 - phi0 + math.pi) % (2 * math.pi) - math.pi
+        pm   = phi0 + dphi / 2
+        dw   = (w1 - w0) / (0.5 * (w0 + w1))
+        # rho = dphi * e_perp - (dw) * e_r  (direzione di v_j - v_i, scalata da 1/d)
+        rho = np.array([-math.sin(pm) * dphi - math.cos(pm) * dw,
+                        math.cos(pm) * dphi - math.sin(pm) * dw])
+        n2 = float(rho @ rho)
+        if n2 < 1e-14:                       # vicino già allineato: nessun segnale
+            return None
+        vx, vy = x1 - x0, y1 - y0            # spostamento proprio sulla stessa finestra
+        nv = math.hypot(vx, vy)
+        if nv < 1e-12:
+            return None
+        ui = np.array([vx / nv, vy / nv])
+        k = -2.0 * float(ui @ rho) / n2      # da |u_j| = 1
+        if k <= 0:
+            return None
+        uj = ui + k * rho
+        return math.atan2(uj[1], uj[0])
 
     def _increment_groups(self, edge_counts, groups):
         """Incrementa di 1 gli slot degli spin corrispondenti ai gruppi indicati."""
