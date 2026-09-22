@@ -4,11 +4,11 @@
         "collisions": false,
         "ticks_per_second": 5,
         "time_limit":1800,
-        "num_runs": 1,
-        "gui":{
-        "_id": "2D",
-        "on_click": ["spins","detection"],
-        "view": ["detection"]
+        "num_runs": 10,
+        "gui": {
+            "_id": "2D",
+            "on_click": ["spins", "detection"],
+            "view": ["detection"]
         },
         "arenas": {
             "arena_0": {
@@ -43,14 +43,14 @@
                     "v0": 0.08,
                     "num_groups":30,
                     "num_spins_per_group": 3,
-                    "T": 0.1,
+                    "T": 0.6,
                     "J": 5,
                     "nu": 0.4,
                     "task": "flocking",
                     "arena_repulsion_weight": 0.5,
-                    "repulsion_weight": 0.3,
-                    "edge_weight":0.8,
-                    "align_weight": 0.5, 
+                    "repulsion_weight": 0.5,
+                    "edge_weight":0.6,
+                    "align_weight": 0, 
                     "align_kappa": 4.0,
                     "align_source": "flow", 
                     "flow_lag": 10,
