@@ -185,7 +185,7 @@ class VisualDetectionModel(DetectionModel):
                 angle_rad += TWO_PI
 
             # Ampiezza angolare: tratta arc_half come raggio apparente del segmento
-            half_subt = math.asin(arc_half / max(distance, 1e-6))
+            half_subt = math.asin(min(radius / max(distance, 1e-6), 1.0))
             obj_min   = angle_rad - half_subt
             obj_max   = angle_rad + half_subt
 
@@ -278,7 +278,7 @@ class VisualDetectionModel(DetectionModel):
                 if distance > self.max_detection_distance:
                     continue
 
-                angle_world = math.degrees(math.atan2(-dy, dx))
+                angle_world = math.degrees(math.asin(-dy, dx))
 
                 if self.reference == "egocentric":
                     angle = normalize_angle(angle_world - self.agent.orientation.z)
@@ -495,7 +495,7 @@ class VisualDetectionModel(DetectionModel):
                 if distance > self.max_detection_distance:
                     continue
 
-                angle_world = math.degrees(math.atan2(-dy, dx))
+                angle_world = math.degrees(math.asin(-dy, dx))
 
                 if self.reference == "egocentric":
                     angle = normalize_angle(angle_world - self.agent.orientation.z)
