@@ -278,7 +278,7 @@ class VisualDetectionModel(DetectionModel):
                 if distance > self.max_detection_distance:
                     continue
 
-                angle_world = math.degrees(math.asin(-dy, dx))
+                angle_world = math.degrees(math.atan2(-dy, dx))
 
                 if self.reference == "egocentric":
                     angle = normalize_angle(angle_world - self.agent.orientation.z)
@@ -289,7 +289,7 @@ class VisualDetectionModel(DetectionModel):
                 if angle_rad < 0:
                     angle_rad += TWO_PI
 
-                half_subt = math.atan(radius / max(distance, 1e-6))
+                half_subt = math.atan2(radius / max(distance, 1e-6))
 
                 name = target_name or f"{club}_{n}"
                 heading = self._estimate_heading(name, meta, angle_rad, 2 * half_subt)
@@ -495,7 +495,7 @@ class VisualDetectionModel(DetectionModel):
                 if distance > self.max_detection_distance:
                     continue
 
-                angle_world = math.degrees(math.asin(-dy, dx))
+                angle_world = math.degrees(math.atan2(-dy, dx))
 
                 if self.reference == "egocentric":
                     angle = normalize_angle(angle_world - self.agent.orientation.z)
@@ -506,7 +506,7 @@ class VisualDetectionModel(DetectionModel):
                 if angle_rad < 0:
                     angle_rad += TWO_PI
 
-                half_subt = math.atan(radius / max(distance, 1e-6))
+                half_subt = math.atan2(radius / max(distance, 1e-6))
                 obj_min   = angle_rad - half_subt
                 obj_max   = angle_rad + half_subt
 
