@@ -185,7 +185,7 @@ class VisualDetectionModel(DetectionModel):
                 angle_rad += TWO_PI
 
             # Ampiezza angolare: tratta arc_half come raggio apparente del segmento
-            half_subt = math.asin(min(radius / max(distance, 1e-6), 1.0))
+            half_subt = math.atan(min(radius / max(distance, 1e-6), 1.0))
             obj_min   = angle_rad - half_subt
             obj_max   = angle_rad + half_subt
 
