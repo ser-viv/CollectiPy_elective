@@ -1,153 +1,542 @@
 """
 analysis.py
 ===========
-Analisi dei dati per gli esperimenti di allocentric flocking.
+Analysis of the allocentric flocking experiments (EW x RW grid at fixed AW).
 
-Struttura attesa:
-    EX_01/EX_01/run_1.zip  →  run_1/group_metrics.csv
-    EX_02/EX_02/run_1.zip  →  run_1/group_metrics.csv
+Expected layout:
+    data/EX_01/EX_01/run_1.zip  ->  run_1/group_metrics.csv
+                                    run_1/movable_0.m#<i>.pkl   (positions)
     ...
-    EX_25/EX_25/run_1.zip  →  run_1/group_metrics.csv
+    data/EX_25/EX_25/run_N.zip
 
-Colonne CSV: tick, group, cohesion, polarization, heading_mean_deg
+Parameters per experiment:
+    AW = align_weight       fixed to 0.2 for the whole batch
+    EW = edge_weight        in {0, 0.25, 0.5, 0.75, 1}
+    RW = repulsion_weight   in {0, 0.25, 0.5, 0.75, 1}
 
-Parametri per esperimento:
-    AW = align_weight       fissato a 0.2 per tutta la batch
-    EW = edge_weight        ∈ {0, 0.25, 0.5, 0.75, 1}
-    RW = repulsion_weight   ∈ {0, 0.25, 0.5, 0.75, 1}
+Style, colour scales and fonts are defined in the STYLE section below
+(identical in mini_analysis.py). The METRICS are
+computed exactly as in the previous version of this script; only the
+figures have changed.
 
-Griglia 5×5 = 25 esperimenti, ad align_weight fisso (vedi EXPERIMENTS).
+Sources
+-------
+* group_metrics.csv (written by the simulator, 1 row per simulated second):
+    - polarization  Phi_body = |mean_i (cos theta_i, sin theta_i)|, from the
+      agents' BODY orientation
+    - cohesion      C = 1 - mean_i |r_i - c| / D_arena
+* movable_0.m#<i>.pkl (raw positions, 1 snapshot per simulated second).
+  All the additional metrics below are computed here, offline, from the
+  positions: no new simulation is needed.
 
-Analisi prodotte:
-    1. Heatmap delle metriche medie (EW × RW) — solo le medie, niente
-       pannelli di deviazione standard
-    2. Evoluzione temporale con banda di confidenza (media ± std), griglia
-       EW × RW
-    3. Distribuzione finale delle metriche per esperimento (tutti e 25)
-    4. Confronto RW a EW fissa
-    5. Collisioni/affollamento tra agenti (EW × RW), calcolate dalle
-       posizioni grezze salvate in run_N.zip (movable_0.m#<i>.pkl):
-         - NND media (nearest-neighbor distance): distanza media dal
-           vicino più vicino, per agente, nella fase stazionaria
-         - tasso di collisione: frazione di tick stazionari in cui la
-           distanza minima tra due agenti scende sotto AGENT_DIAMETER
+Metrics
+-------
+Polarization
+    Phi_body      as in the CSV (body orientation)
+    Phi_vel       |mean_i u_i|, u_i = unit displacement over VELOCITY_LAG
+                  snapshots; agents that moved less than MIN_DISPLACEMENT
+                  contribute u_i = 0 (an agent turning on the spot does not
+                  count as aligned)
+    Phi*          (Phi - Phi_0) / (1 - Phi_0), Phi_0 = chance level for N
+                  random headings (Monte Carlo, ~0.40 for N = 5)
+    P(Phi > 0.8)  fraction of stationary time spent in an ordered state
+    Milling       Couzin et al. (2002): M = |mean_i (r_hat_i x u_i)|, with
+                  r_hat_i the unit vector from the rotation centre to agent i.
+                  Computed around the group centroid (M_group, classic
+                  milling) and around the arena centre (M_arena, circling
+                  along the wall).
+    Phi_vel far from wall   Phi_vel restricted to snapshots in which every
+                  agent is farther than WALL_MARGIN_BL body lengths from the
+                  wall (excludes forced turns at the boundary)
+Cohesion / group structure (BL = AGENT_DIAMETER = 0.033 m)
+    C             as in the CSV
+    C*            1 - d / d_random, d = mean distance from centroid,
+                  d_random = same quantity for N agents uniformly placed in
+                  the arena (Monte Carlo). 0 = random placement, 1 = compact
+    d_centroid    mean distance from centroid, in BL
+    R_g           radius of gyration sqrt(mean |r_i - c|^2), in BL
+    d_pair        mean distance over all agent pairs, in BL
+    Largest cluster   fraction of agents in the largest connected cluster,
+                  two agents being connected if closer than
+                  CLUSTER_THRESHOLD_BL body lengths
+    Near-wall time    fraction of stationary time with at least one agent
+                  closer than WALL_MARGIN_BL body lengths to the wall
+Crowding
+    NND           mean nearest-neighbour distance (m)
+    Collision rate    fraction of stationary snapshots with min pairwise
+                  distance < AGENT_DIAMETER
+
+All stationary quantities are averaged over the last STATIONARY_FRACTION of
+each run, then averaged over runs.
+
+Outputs (in OUTPUT_DIR)
+-----------------------
+Figures for the main text:
+    heatmap_stationary_metrics.png   Phi (top) and C (bottom), with Phi* and C*
+                                     on the same colour bars
+    heatmap_structure.png            largest cluster, milling around the arena
+                                     centre, fraction of time with Phi > 0.8
+    distribution_polarisation.png    distribution of stationary Phi, 5 RW at EW = 0.5
+    temporal_combined.png            Phi and C over time, 2 x 5 (columns EW,
+                                     curves RW), moving average + 95% CI
+    boxplot_metrics.png              per-run stationary Phi and C
+    heatmap_collisions.png           mean NND and collision rate
+    boxplot_collisions.png           per-run NND and collision rate
+Figures for the appendix:
+    appendix_structure.png           Phi_v, Phi_v away from the wall, distances
+                                     in BL, milling around the centroid,
+                                     near-wall time
+    appendix_distributions.png       distributions of Phi for every EW (1 x 5)
+Tables:
+    summary_metrics.csv, random_baselines.txt
 """
 
-import os
 import io
+import os
 import pickle
 import zipfile
 import itertools
+import warnings
+
 import numpy as np
 import pandas as pd
+
+# =============================================================================
+# STILE DELLE FIGURE (ex figstyle.py)
+# Identico in analysis.py e mini_analysis.py: se cambiate una scala o un colore
+# qui, cambiatelo anche nell'altro file, così le figure restano coerenti.
+# =============================================================================
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import warnings
+from matplotlib import colors as mcolors
+from matplotlib.patches import Patch
+from matplotlib.ticker import PercentFormatter
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIMENSIONI E FONT
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIG_WIDTH = 7.0     # pollici ≈ larghezza del testo in A4: includere con width=\textwidth
+ANNOT_SIZE = 8.5    # valori scritti nelle celle delle heatmap
+
+plt.rcParams.update({
+    "font.size": 9,
+    "axes.titlesize": 10,
+    "axes.labelsize": 9.5,
+    "xtick.labelsize": 8.5,
+    "ytick.labelsize": 8.5,
+    "legend.fontsize": 8.5,
+    "legend.title_fontsize": 9,
+    "savefig.dpi": 300,
+    "savefig.bbox": "tight",
+})
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPO E STATISTICA
+# ─────────────────────────────────────────────────────────────────────────────
+
+TICK_DT = 0.2               # s per tick (5 Hz)
+SMOOTHING_WINDOW_S = 60.0   # media mobile centrata delle serie temporali
+CI_Z = 1.96                 # IC al 95% della media
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RIFERIMENTI PER LE SCALE CORRETTE PER IL CASO
+# ─────────────────────────────────────────────────────────────────────────────
+
+PHI_CHANCE = 0.40                        # E[Φ] per 5 orientazioni indipendenti
+ARENA_DIAMETER = 2.0                     # m
+D_RAND = 0.583                           # distanza media dal centroide, 5 agenti casuali
+C_RAND = 1.0 - D_RAND / ARENA_DIAMETER   # ≈ 0.7085, corrisponde a C* = 0
+ORDER_THRESHOLD = 0.8
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STILE PER METRICA: stessa colormap e stesso intervallo ovunque
+# ─────────────────────────────────────────────────────────────────────────────
+
+METRIC_STYLE = {
+    "polarization":   dict(label=r"Polarisation $\Phi$", cmap="viridis",
+                           lim=(PHI_CHANCE, 1.0), fmt="{:.3f}"),
+    "cohesion":       dict(label=r"Cohesion $C$", cmap="cividis",
+                           lim=(C_RAND, 1.0), fmt="{:.3f}"),
+    "fraction":       dict(label="Fraction", cmap="magma",
+                           lim=(0.0, 1.0), fmt="{:.2f}"),
+    "nnd":            dict(label="Mean NND (m)", cmap="Blues",
+                           lim=(0.0, 0.5), fmt="{:.3f}"),
+    "collision_rate": dict(label="Collision rate", cmap="Reds",
+                           lim=(0.0, 1.0), fmt="{:.1%}"),
+    "distance_bl":    dict(label="Distance (BL)", cmap="Greens",
+                           lim=(0.0, 16.0), fmt="{:.1f}"),
+}
+
+# Scale secondarie (trasformazioni lineari) mostrate sulla stessa colorbar
+SECONDARY_SCALE = {
+    "polarization": (
+        r"$\Phi^*$",
+        lambda x: (x - PHI_CHANCE) / (1.0 - PHI_CHANCE),
+        lambda y: PHI_CHANCE + y * (1.0 - PHI_CHANCE),
+    ),
+    "cohesion": (
+        r"$C^*$",
+        lambda c: 1.0 - ARENA_DIAMETER * (1.0 - c) / D_RAND,
+        lambda s: 1.0 - (1.0 - s) * D_RAND / ARENA_DIAMETER,
+    ),
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNZIONI DI SUPPORTO
+# ─────────────────────────────────────────────────────────────────────────────
+
+def series_colours(n: int) -> np.ndarray:
+    """Colori sequenziali per n curve ordinate (es. valori di RW); niente giallo chiaro."""
+    return plt.get_cmap("plasma")(np.linspace(0.0, 0.85, n))
+
+
+def _finite(values) -> np.ndarray:
+    return np.asarray([x for x in np.ravel(values) if np.isfinite(x)], dtype=float)
+
+
+def check_range(values, lim, what: str):
+    """Avvisa se dei valori escono dall'intervallo fisso della metrica."""
+    v = _finite(values)
+    if v.size and (v.min() < lim[0] or v.max() > lim[1]):
+        print(f"  [WARN] {what}: valori in [{v.min():.3f}, {v.max():.3f}] "
+              f"fuori dall'intervallo fisso {lim}")
+
+
+def extend_mode(values, lim) -> str:
+    v = _finite(values)
+    if not v.size:
+        return "neither"
+    lo, hi = v.min() < lim[0], v.max() > lim[1]
+    return "both" if lo and hi else "min" if lo else "max" if hi else "neither"
+
+
+def text_colour(rgba) -> str:
+    r, g, b, _ = rgba
+    return "black" if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5 else "white"
+
+
+def save(fig, path: str):
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HEATMAP E COLORBAR
+# ─────────────────────────────────────────────────────────────────────────────
+
+def annotated_heatmap(ax, mat: np.ndarray, style_key: str, xvals, yvals,
+                      xlabel: str | None = "Repulsion weight $RW$",
+                      ylabel: str | None = "Edge weight $EW$",
+                      title: str | None = None, aspect: str = "equal",
+                      fmt: str | None = None):
+    """Heatmap con la scala fissa della metrica e i valori scritti nelle celle."""
+    st = METRIC_STYLE[style_key]
+    lim = st["lim"]
+    fmt = fmt or st["fmt"]
+    check_range(mat, lim, (title or style_key).replace("\n", " "))
+
+    cmap = plt.get_cmap(st["cmap"])
+    norm = mcolors.Normalize(vmin=lim[0], vmax=lim[1])
+    im = ax.imshow(mat, cmap=cmap, norm=norm, aspect=aspect)
+
+    ax.set_xticks(range(len(xvals)))
+    ax.set_yticks(range(len(yvals)))
+    ax.set_xticklabels([f"{v:g}" for v in xvals])
+    ax.set_yticklabels([f"{v:g}" for v in yvals])
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+
+    for i in range(mat.shape[0]):
+        for j in range(mat.shape[1]):
+            val = mat[i, j]
+            if np.isfinite(val):
+                ax.text(j, i, fmt.format(val), ha="center", va="center",
+                        fontsize=ANNOT_SIZE, color=text_colour(cmap(norm(val))))
+    return im
+
+
+def style_colorbar(fig, im, ax, style_key: str, values, label: str | None = None, **kwargs):
+    """
+    Colorbar della metrica. Per Φ e C aggiunge la scala corretta per il caso
+    (Φ*, C*): scala grezza a sinistra della barra, scala corretta a destra.
+    `ax` può essere un singolo asse o una lista (colorbar condivisa).
+    """
+    st = METRIC_STYLE[style_key]
+    has_secondary = style_key in SECONDARY_SCALE
+    kwargs.setdefault("fraction", 0.046)
+    kwargs.setdefault("pad", 0.16 if has_secondary else 0.04)
+    cb = fig.colorbar(im, ax=ax, extend=extend_mode(values, st["lim"]), **kwargs)
+    cb.set_label(label or st["label"])
+    if style_key == "collision_rate":
+        cb.ax.yaxis.set_major_formatter(PercentFormatter(1.0, decimals=0))
+    if has_secondary:
+        cb.ax.yaxis.set_ticks_position("left")
+        cb.ax.yaxis.set_label_position("left")
+        lab, f, finv = SECONDARY_SCALE[style_key]
+        sec = cb.ax.secondary_yaxis("right", functions=(f, finv))
+        sec.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+        sec.set_ylabel(lab)
+    return cb
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERIE TEMPORALI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_timeseries(runs: list[pd.DataFrame], stationary_fraction: float,
+                     metrics=("polarization", "cohesion")) -> dict | None:
+    """
+    Allinea le run sui tick comuni, liscia ogni run con una media mobile
+    centrata di SMOOTHING_WINDOW_S e calcola media e semi-ampiezza
+    dell'IC al 95% (CI_Z · σ/√n) tra le run.
+    """
+    if not runs:
+        return None
+    tick_sets = [set(r["tick"].values) for r in runs]
+    common = sorted(tick_sets[0].intersection(*tick_sets[1:]))
+    if len(common) < 2:
+        return None
+
+    time_s = np.asarray(common, dtype=float) * TICK_DT
+    win = max(1, int(round(SMOOTHING_WINDOW_S / float(np.median(np.diff(time_s))))))
+    out = {
+        "time_s": time_s,
+        "window_samples": win,
+        "cutoff_s": time_s[int(len(time_s) * (1 - stationary_fraction))],
+    }
+    for metric in metrics:
+        arr = np.array([r.set_index("tick").loc[common, metric].to_numpy(dtype=float)
+                        for r in runs])
+        smooth = (pd.DataFrame(arr.T)
+                  .rolling(win, center=True, min_periods=1).mean()
+                  .to_numpy().T)
+        n = smooth.shape[0]
+        mean = np.nanmean(smooth, axis=0)
+        se = (np.nanstd(smooth, axis=0, ddof=1) / np.sqrt(n)) if n > 1 else np.zeros_like(mean)
+        out[f"{metric}_mean"] = mean
+        out[f"{metric}_ci"] = CI_Z * se
+    return out
+
+
+def plot_temporal_grid(get_ts, col_values, curve_values, col_name: str,
+                       curve_name: str, path: str):
+    """
+    Figura 2 × len(col_values): Φ sopra, C sotto; una colonna per valore
+    di col_values (es. EW); in ogni pannello una curva per valore di
+    curve_values (es. RW). get_ts(col, curve) restituisce la serie temporale
+    prodotta da build_timeseries, oppure None.
+    """
+    metrics = ("polarization", "cohesion")
+    colours = series_colours(len(curve_values))
+    fig, axes = plt.subplots(len(metrics), len(col_values),
+                             figsize=(FIG_WIDTH, 3.9), sharex=True, sharey="row",
+                             squeeze=False)
+
+    cutoff_s, t_max = None, None
+    for r, metric in enumerate(metrics):
+        lo, hi = METRIC_STYLE[metric]["lim"]
+        pad = 0.04 * (hi - lo)
+        for c, cv in enumerate(col_values):
+            ax = axes[r, c]
+            for k, kv in enumerate(curve_values):
+                ts = get_ts(cv, kv)
+                if ts is None:
+                    continue
+                t, m, h = ts["time_s"], ts[f"{metric}_mean"], ts[f"{metric}_ci"]
+                ax.fill_between(t, m - h, m + h, color=colours[k], alpha=0.25, linewidth=0)
+                ax.plot(t, m, color=colours[k], linewidth=1.1, label=f"{kv:g}")
+                cutoff_s, t_max = ts["cutoff_s"], t[-1]
+
+            if cutoff_s is not None:
+                ax.axvline(cutoff_s, color="0.35", linewidth=0.8)
+            if metric == "polarization":
+                ax.axhline(PHI_CHANCE, color="0.35", linewidth=0.8, linestyle="--")
+            ax.set_ylim(lo - pad, hi)
+            ax.grid(alpha=0.25)
+            if r == 0:
+                ax.set_title(f"{col_name} = {cv:g}")
+            if c == 0:
+                ax.set_ylabel(METRIC_STYLE[metric]["label"])
+            if r == len(metrics) - 1:
+                ax.set_xlabel("Time (s)")
+
+    if t_max is not None:
+        axes[0, 0].set_xlim(0, t_max)
+        for ax in axes[-1]:
+            ax.set_xticks([0, 900, 1800] if t_max >= 1800 else [0, t_max / 2, t_max])
+
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    fig.tight_layout()
+    fig.legend(handles, labels, title=curve_name, loc="center left",
+               bbox_to_anchor=(1.0, 0.5), frameon=False)
+    save(fig, path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BOXPLOT RAGGRUPPATI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def grouped_boxplot(ax, values: dict[tuple, list], groups, series, style_key: str,
+                    ylabel: str | None, group_name: str):
+    """
+    Un gruppo di box per ogni valore di `groups` (es. EW), un box per ogni
+    valore di `series` (es. RW) colorato in modo sequenziale.
+    values[(g, s)] = lista dei valori per run. Ritorna l'intervallo fisso.
+    """
+    colours = series_colours(len(series))
+    n_s, gap = len(series), 1
+    lim = METRIC_STYLE[style_key]["lim"]
+    all_vals = []
+
+    for gi, g in enumerate(groups):
+        for k, s in enumerate(series):
+            vals = [v for v in values.get((g, s), []) if np.isfinite(v)]
+            if not vals:
+                continue
+            all_vals.extend(vals)
+            bp = ax.boxplot([vals], positions=[gi * (n_s + gap) + k], widths=0.7,
+                            patch_artist=True, showfliers=True, manage_ticks=False,
+                            medianprops=dict(color="black", linewidth=1.0),
+                            flierprops=dict(marker=".", markersize=3,
+                                            markerfacecolor=colours[k],
+                                            markeredgecolor="none"))
+            bp["boxes"][0].set_facecolor(colours[k])
+            bp["boxes"][0].set_alpha(0.85)
+
+    check_range(all_vals, lim, ylabel or style_key)
+    ax.set_xticks([gi * (n_s + gap) + (n_s - 1) / 2 for gi in range(len(groups))])
+    ax.set_xticklabels([f"{group_name} = {g:g}" for g in groups])
+    for gi in range(1, len(groups)):
+        ax.axvline(gi * (n_s + gap) - (gap + 1) / 2, color="0.6", linewidth=0.8, linestyle=":")
+    ax.set_xlim(-1, len(groups) * (n_s + gap) - gap)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    ax.grid(axis="y", alpha=0.3)
+    if style_key == "collision_rate":
+        ax.yaxis.set_major_formatter(PercentFormatter(1.0, decimals=0))
+    return lim
+
+
+def series_legend(fig, series, title: str):
+    """Legenda unica, fuori dai pannelli, per i colori delle serie."""
+    handles = [Patch(facecolor=c, alpha=0.85, label=f"{s:g}")
+               for c, s in zip(series_colours(len(series)), series)]
+    fig.legend(handles=handles, title=title, loc="center left",
+               bbox_to_anchor=(1.0, 0.5), frameon=False)
+
+# =============================================================================
+# FINE STILE
+# =============================================================================
+
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURAZIONE
+# CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Cartella radice che contiene EX_01 ... EX_25
-BASE_DIR = "./data"
+BASE_DIR = "./data"          # folder containing EX_01 ... EX_25
+OUTPUT_DIR = "./figures"
 
-# align_weight è fissato per l'intera batch: non è più un asse del grid,
-# resta solo per etichettare titoli e nomi dei file.
 ALIGN_WEIGHT_FIXED = 0.2
-
-# Valori usati per EW e RW (lo stesso range per entrambi)
 EW_VALUES = [0.0, 0.25, 0.5, 0.75, 1.0]
 RW_VALUES = [0.0, 0.25, 0.5, 0.75, 1.0]
 
-# Schema parametri: EX_n → [align_weight, edge_weight, repulsion_weight]
-# Generato dall'incrocio pieno di EW_VALUES × RW_VALUES, con align_weight
-# sempre uguale a ALIGN_WEIGHT_FIXED.
+# EX_n -> [align_weight, edge_weight, repulsion_weight] (RW varies fastest)
 EXPERIMENTS = {
     f"EX_{i + 1:02d}": [ALIGN_WEIGHT_FIXED, ew, rw]
     for i, (ew, rw) in enumerate(itertools.product(EW_VALUES, RW_VALUES))
 }
 
-# Frazione finale della simulazione usata per calcolare le metriche stazionarie
-# (es. 0.5 = ultima metà della simulazione)
-STATIONARY_FRACTION = 0.5
+STATIONARY_FRACTION = 0.5     # last 50% of each run
 
-# Diametro reale dell'agente (da config): due agenti sono considerati "in
-# collisione"/sovrapposti quando la distanza tra i loro centri scende sotto
-# questa soglia.
-AGENT_DIAMETER = 0.033
+AGENT_DIAMETER = 0.033        # m, = 1 body length (BL)
+ARENA_DIAMETER = 2.0          # m
+ARENA_CENTER = None           # (x, y) in m, or None to detect it from the data
+N_AGENTS_DEFAULT = 5          # used only if it cannot be read from the data
 
-# Calcola anche le metriche di collisione/affollamento dalle posizioni
-# grezze (movable_0.m#<i>.pkl dentro ogni run_N.zip). Si può disattivare
-# per velocizzare un run di sola CSV (polarizzazione/coesione).
-COMPUTE_COLLISIONS = True
+VELOCITY_LAG = 1              # snapshots (1 snapshot = 1 s = 5 ticks)
+MIN_DISPLACEMENT = 0.001      # m over VELOCITY_LAG; below this an agent is "still"
+CLUSTER_THRESHOLD_BL = 5.0    # connection threshold for the largest cluster
+WALL_MARGIN_BL = 6.0          # 6 BL ~ 0.2 m, range of the wall repulsion
+DIST_EW_MAIN = 0.5            # EW shown in the main-text distribution figure
 
-OUTPUT_DIR = "./figures"
+MC_SAMPLES = 200_000          # Monte Carlo samples for the random baselines
+RNG_SEED = 0
+
+COMPUTE_POSITION_METRICS = True   # False -> only the CSV metrics
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+BL = AGENT_DIAMETER
+ARENA_RADIUS = ARENA_DIAMETER / 2.0
 
 
 def find_experiment(ew: float, rw: float) -> str | None:
-    """Trova il nome EX_n corrispondente alla coppia (edge_weight, repulsion_weight)."""
-    for ex_name, (a, e, r) in EXPERIMENTS.items():
+    """Return the EX_n name for a given (EW, RW) pair."""
+    for ex_name, (_, e, r) in EXPERIMENTS.items():
         if e == ew and r == rw:
             return ex_name
     return None
 
 
+def ordered_experiments() -> list[str]:
+    return sorted(EXPERIMENTS.keys(), key=lambda n: int(n.split("_")[1]))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# CARICAMENTO DATI
+# RANDOM BASELINES (Monte Carlo)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_run_metrics(zip_path: str) -> pd.DataFrame | None:
-    """Carica group_metrics.csv da un file run_N.zip."""
-    try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            csv_candidates = [n for n in zf.namelist() if n.endswith("group_metrics.csv")]
-            if not csv_candidates:
-                return None
-            with zf.open(csv_candidates[0]) as f:
-                df = pd.read_csv(io.TextIOWrapper(f, encoding="utf-8"))
-            return df
-    except Exception as e:
-        print(f"  [WARN] impossibile leggere {zip_path}: {e}")
-        return None
+def random_polarization(n_agents: int, samples: int = MC_SAMPLES) -> float:
+    """Expected |mean of n random unit vectors| (chance-level polarization)."""
+    rng = np.random.default_rng(RNG_SEED)
+    a = rng.uniform(0, 2 * np.pi, size=(samples, n_agents))
+    return float(np.abs(np.exp(1j * a).mean(axis=1)).mean())
 
 
-def load_experiment(ex_name: str) -> list[pd.DataFrame]:
-    """Carica tutte le run di un esperimento. Restituisce lista di DataFrame."""
-    ex_dir = os.path.join(BASE_DIR, ex_name, ex_name)
-    if not os.path.isdir(ex_dir):
-        # prova senza subdirectory
-        ex_dir = os.path.join(BASE_DIR, ex_name)
-    if not os.path.isdir(ex_dir):
-        print(f"  [WARN] cartella non trovata: {ex_name}")
+def random_centroid_distance(n_agents: int, radius: float,
+                             samples: int = MC_SAMPLES) -> float:
+    """Expected mean distance from the centroid for n points uniform in a disc."""
+    rng = np.random.default_rng(RNG_SEED + 1)
+    r = radius * np.sqrt(rng.random((samples, n_agents)))
+    t = rng.uniform(0, 2 * np.pi, size=(samples, n_agents))
+    z = r * np.exp(1j * t)
+    return float(np.abs(z - z.mean(axis=1, keepdims=True)).mean())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA LOADING
+# ─────────────────────────────────────────────────────────────────────────────
+
+def experiment_dir(ex_name: str) -> str | None:
+    for d in (os.path.join(BASE_DIR, ex_name, ex_name), os.path.join(BASE_DIR, ex_name)):
+        if os.path.isdir(d):
+            return d
+    return None
+
+
+def list_runs(ex_name: str) -> list[str]:
+    d = experiment_dir(ex_name)
+    if d is None:
         return []
+    names = [f for f in os.listdir(d) if f.startswith("run_") and f.endswith(".zip")]
+    names.sort(key=lambda f: int("".join(ch for ch in f if ch.isdigit()) or 0))
+    return [os.path.join(d, f) for f in names]
 
-    runs = []
-    for fname in sorted(os.listdir(ex_dir)):
-        if fname.startswith("run_") and fname.endswith(".zip"):
-            df = load_run_metrics(os.path.join(ex_dir, fname))
-            if df is not None and len(df) > 0:
-                runs.append(df)
-    print(f"  {ex_name}: {len(runs)} run caricate")
-    return runs
-
-
-def load_all_experiments() -> dict[str, list[pd.DataFrame]]:
-    """Carica tutti gli esperimenti."""
-    print("Caricamento dati...")
-    data = {}
-    for ex_name in EXPERIMENTS:
-        data[ex_name] = load_experiment(ex_name)
-    return data
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# COLLISIONI / AFFOLLAMENTO (dalle posizioni grezze in run_N.zip)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _read_pickle_rows(zf: zipfile.ZipFile, name: str) -> list[dict]:
-    """Legge un file .pkl 'a record' (un pickle per riga, come i file
-    movable_0.m#<i>.pkl) e ne estrae le righe di tipo 'row'."""
+    """Read a record-style .pkl (one pickle per row) and keep the 'row' entries."""
     rows = []
     u = pickle.Unpickler(io.BytesIO(zf.read(name)))
     while True:
@@ -155,641 +544,511 @@ def _read_pickle_rows(zf: zipfile.ZipFile, name: str) -> list[dict]:
             rows.append(u.load())
         except EOFError:
             break
-    return [r["value"] for r in rows if r.get("type") == "row"]
+    return [r["value"] for r in rows if isinstance(r, dict) and r.get("type") == "row"]
 
 
-def load_run_positions(zip_path: str) -> np.ndarray | None:
-    """
-    Carica le posizioni (x, y) di tutti gli agenti da un run_N.zip, leggendo
-    i file 'movable_0.m#<i>.pkl' (esclusi quelli '_spins', che contengono gli
-    spin del ring attractor e non le posizioni).
-
-    Ritorna un array (n_tick, n_agenti, 2), oppure None se non trovate.
-    """
-    try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            agent_files = sorted(
-                n for n in zf.namelist()
-                if n.endswith(".pkl") and "_spins" not in n
-            )
-            if not agent_files:
-                return None
-            series = []
-            for name in agent_files:
-                rows = _read_pickle_rows(zf, name)
-                if not rows:
-                    return None
-                df = pd.DataFrame(rows)
-                series.append(df[["pos x", "pos y"]].to_numpy())
-            n = min(len(s) for s in series)
-            if n == 0:
-                return None
-            pos = np.stack([s[:n] for s in series], axis=1)  # (n_tick, n_agenti, 2)
-            return pos
-    except Exception as e:
-        print(f"  [WARN] impossibile leggere le posizioni da {zip_path}: {e}")
+def read_csv_metrics(zf: zipfile.ZipFile) -> pd.DataFrame | None:
+    names = [n for n in zf.namelist() if n.endswith("group_metrics.csv")]
+    if not names:
         return None
+    with zf.open(names[0]) as f:
+        df = pd.read_csv(io.TextIOWrapper(f, encoding="utf-8"))
+    return df if len(df) else None
 
 
-def pairwise_distance_series(pos: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def read_positions(zf: zipfile.ZipFile) -> tuple[np.ndarray, np.ndarray] | None:
     """
-    pos: array (n_tick, n_agenti, 2).
-
-    Ritorna, per ogni tick:
-        - min_dist:  distanza minima tra una qualunque coppia di agenti
-        - nnd_mean:  media, sugli agenti, della distanza dal vicino più
-                     vicino (nearest-neighbor distance)
+    Positions of all agents from the movable_*.pkl files (the *_spins files
+    are skipped). Agents are aligned on the tick column.
+    Returns (ticks (T,), pos (T, N, 2)) or None.
     """
-    n_tick, n_agents, _ = pos.shape
-    diff = pos[:, :, None, :] - pos[:, None, :, :]
-    dist = np.hypot(diff[..., 0], diff[..., 1])
-    idx = np.arange(n_agents)
-    dist[:, idx, idx] = np.inf  # ignora la distanza di un agente da se stesso
-    min_dist = dist.min(axis=(1, 2))
-    nnd = dist.min(axis=2)          # (n_tick, n_agenti)
-    nnd_mean = nnd.mean(axis=1)
-    return min_dist, nnd_mean
+    files = sorted(n for n in zf.namelist() if n.endswith(".pkl") and "_spins" not in n)
+    if not files:
+        return None
+    per_agent = []
+    for name in files:
+        rows = _read_pickle_rows(zf, name)
+        if not rows:
+            return None
+        df = pd.DataFrame(rows)
+        if not {"pos x", "pos y"}.issubset(df.columns):
+            return None
+        if "tick" not in df.columns:
+            df["tick"] = np.arange(len(df))
+        per_agent.append(df.drop_duplicates("tick").set_index("tick")[["pos x", "pos y"]])
+    common = per_agent[0].index
+    for df in per_agent[1:]:
+        common = common.intersection(df.index)
+    common = common.sort_values()
+    if len(common) <= VELOCITY_LAG + 1:
+        return None
+    pos = np.stack([df.loc[common].to_numpy(dtype=float) for df in per_agent], axis=1)
+    return np.asarray(common), pos
 
 
-def collision_stats_for_run(pos: np.ndarray, fraction: float = STATIONARY_FRACTION) -> dict:
-    """Statistiche di collisione/affollamento per una singola run, calcolate
-    sulla fase stazionaria (stessa convenzione di STATIONARY_FRACTION usata
-    per polarizzazione/coesione)."""
-    min_dist, nnd_mean = pairwise_distance_series(pos)
-    n = len(min_dist)
-    start = int(n * (1 - fraction))
-    min_dist_stat = min_dist[start:]
-    nnd_stat = nnd_mean[start:]
+def resolve_center(pos: np.ndarray) -> np.ndarray:
+    """Arena centre: configured, origin if the data fit around it, else midpoint."""
+    if ARENA_CENTER is not None:
+        return np.asarray(ARENA_CENTER, dtype=float)
+    if np.nanmax(np.hypot(pos[..., 0], pos[..., 1])) <= ARENA_RADIUS * 1.05:
+        return np.zeros(2)
+    flat = pos.reshape(-1, 2)
+    return (np.nanmin(flat, axis=0) + np.nanmax(flat, axis=0)) / 2.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PER-RUN METRICS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def stationary_slice(n: int, fraction: float = STATIONARY_FRACTION) -> slice:
+    return slice(int(n * (1 - fraction)), n)
+
+
+def largest_cluster_fraction(dist: np.ndarray, threshold: float) -> np.ndarray:
+    """dist: (T, N, N). Fraction of agents in the largest connected component."""
+    t, n, _ = dist.shape
+    adj = (dist < threshold).astype(np.int64)
+    adj[:, np.arange(n), np.arange(n)] = 1
+    reach = adj.copy()
+    for _ in range(n - 1):  # transitive closure (N is small)
+        reach = (np.matmul(reach, adj) > 0).astype(np.int64)
+    return reach.sum(axis=2).max(axis=1) / n
+
+
+def milling(rel: np.ndarray, unit_v: np.ndarray) -> np.ndarray:
+    """Couzin et al. (2002) rotation order parameter |mean_i (r_hat_i x u_i)|."""
+    norm = np.linalg.norm(rel, axis=2, keepdims=True)
+    r_hat = np.divide(rel, norm, out=np.zeros_like(rel), where=norm > 1e-12)
+    cross = r_hat[..., 0] * unit_v[..., 1] - r_hat[..., 1] * unit_v[..., 0]
+    return np.abs(cross.mean(axis=1))
+
+
+def position_series(ticks: np.ndarray, pos: np.ndarray, d_random: float) -> pd.DataFrame:
+    """Time series of all position-based metrics for one run."""
+    lag = VELOCITY_LAG
+    disp = pos[lag:] - pos[:-lag]                # (T', N, 2)
+    p = pos[lag:]                                # positions at the end of each interval
+    n_agents = p.shape[1]
+    center = resolve_center(pos)
+
+    speed = np.linalg.norm(disp, axis=2, keepdims=True)
+    unit_v = np.divide(disp, speed, out=np.zeros_like(disp), where=speed > MIN_DISPLACEMENT)
+    pol_vel = np.linalg.norm(unit_v.mean(axis=1), axis=1)
+
+    c = p.mean(axis=1, keepdims=True)
+    rel = p - c
+    dist_c = np.linalg.norm(rel, axis=2)
+    d_centroid = dist_c.mean(axis=1)
+    r_g = np.sqrt((dist_c ** 2).mean(axis=1))
+
+    diff = p[:, :, None, :] - p[:, None, :, :]
+    dist = np.linalg.norm(diff, axis=3)
+    iu = np.triu_indices(n_agents, 1)
+    pair = dist[:, iu[0], iu[1]]
+    d_pair = pair.mean(axis=1)
+    min_dist = pair.min(axis=1)
+    dist_nn = dist.copy()
+    dist_nn[:, np.arange(n_agents), np.arange(n_agents)] = np.inf
+    nnd = dist_nn.min(axis=2).mean(axis=1)
+    largest = largest_cluster_fraction(dist, CLUSTER_THRESHOLD_BL * BL)
+
+    m_group = milling(rel, unit_v)
+    m_arena = milling(p - center, unit_v)
+
+    wall_dist = ARENA_RADIUS - np.linalg.norm(p - center, axis=2)
+    near_wall = (wall_dist < WALL_MARGIN_BL * BL).any(axis=1)
+
+    return pd.DataFrame({
+        "tick":          ticks[lag:],
+        "pol_vel":       pol_vel,
+        "cohesion_star": 1.0 - d_centroid / d_random,
+        "d_centroid_bl": d_centroid / BL,
+        "rg_bl":         r_g / BL,
+        "d_pair_bl":     d_pair / BL,
+        "largest_cluster": largest,
+        "milling_group": m_group,
+        "milling_arena": m_arena,
+        "near_wall":     near_wall.astype(float),
+        "nnd_m":         nnd,
+        "collision":     (min_dist < AGENT_DIAMETER).astype(float),
+    })
+
+
+def summarize_csv(df: pd.DataFrame) -> tuple[dict, np.ndarray]:
+    s = stationary_slice(len(df))
+    pol = df["polarization"].to_numpy(dtype=float)
+    coh = df["cohesion"].to_numpy(dtype=float)
+    scalars = {
+        "pol_body":         float(np.nanmean(pol[s])),
+        "cohesion":         float(np.nanmean(coh[s])),
+        "pol_body_ordered": float(np.nanmean(pol[s] > ORDER_THRESHOLD)),
+    }
+    return scalars, pol[s]
+
+
+def summarize_positions(ts: pd.DataFrame) -> tuple[dict, np.ndarray]:
+    st = ts.iloc[stationary_slice(len(ts))]
+    far = st.loc[st["near_wall"] == 0, "pol_vel"]
+    scalars = {
+        "pol_vel":          float(st["pol_vel"].mean()),
+        "pol_vel_ordered":  float((st["pol_vel"] > ORDER_THRESHOLD).mean()),
+        "pol_vel_far_wall": float(far.mean()) if len(far) else np.nan,
+        "cohesion_star":    float(st["cohesion_star"].mean()),
+        "d_centroid_bl":    float(st["d_centroid_bl"].mean()),
+        "rg_bl":            float(st["rg_bl"].mean()),
+        "d_pair_bl":        float(st["d_pair_bl"].mean()),
+        "largest_cluster":  float(st["largest_cluster"].mean()),
+        "milling_group":    float(st["milling_group"].mean()),
+        "milling_arena":    float(st["milling_arena"].mean()),
+        "near_wall":        float(st["near_wall"].mean()),
+        "nnd_m":            float(st["nnd_m"].mean()),
+        "collision_rate":   float(st["collision"].mean()),
+    }
+    return scalars, st["pol_vel"].to_numpy()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PER-EXPERIMENT AGGREGATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def process_experiment(ex_name: str, d_random: float) -> dict:
+    per_run = []                       # list of dicts of scalars
+    csv_runs = []                      # raw CSVs, for the time series
+    stationary_values = {"pol_body": [], "pol_vel": []}
+
+    for zip_path in list_runs(ex_name):
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                csv = read_csv_metrics(zf)
+                positions = read_positions(zf) if COMPUTE_POSITION_METRICS else None
+        except Exception as e:
+            print(f"  [WARN] cannot read {zip_path}: {e}")
+            continue
+        run = {}
+        if csv is not None:
+            sc, sv = summarize_csv(csv)
+            run.update(sc)
+            csv_runs.append(csv.drop_duplicates("tick").reset_index(drop=True))
+            stationary_values["pol_body"].append(sv)
+        if positions is not None:
+            ts = position_series(*positions, d_random=d_random)
+            sc, sv = summarize_positions(ts)
+            run.update(sc)
+            stationary_values["pol_vel"].append(sv)
+        if run:
+            per_run.append(run)
+
+    runs_df = pd.DataFrame(per_run)
     return {
-        "nnd_mean":       float(np.mean(nnd_stat)),
-        "collision_rate": float(np.mean(min_dist_stat < AGENT_DIAMETER)),
+        "n_runs":     len(per_run),
+        "runs":       runs_df,
+        "mean":       runs_df.mean(numeric_only=True).to_dict() if len(runs_df) else {},
+        "std":        runs_df.std(ddof=0, numeric_only=True).to_dict() if len(runs_df) else {},
+        # smoothed mean and 95% CI of Phi and C over time (see build_timeseries)
+        "timeseries": build_timeseries(csv_runs, STATIONARY_FRACTION),
+        "stationary_values": {k: (np.concatenate(v) if v else np.array([]))
+                              for k, v in stationary_values.items()},
     }
 
 
-def compute_experiment_collision_stats(ex_name: str) -> dict:
-    """
-    Carica le run di un esperimento e calcola, nella fase stazionaria:
-        - nnd_mean:            NND media su run e agenti
-        - collision_rate_mean: tasso medio di collisione sulle run
-        - nnd_vals / coll_vals: valori per singola run (per i boxplot)
-    """
-    ex_dir = os.path.join(BASE_DIR, ex_name, ex_name)
-    if not os.path.isdir(ex_dir):
-        ex_dir = os.path.join(BASE_DIR, ex_name)
-    if not os.path.isdir(ex_dir):
-        return {"nnd_mean": np.nan, "collision_rate_mean": np.nan,
-                "nnd_vals": [], "coll_vals": [], "n_runs": 0}
-
-    nnd_vals, coll_vals = [], []
-    for fname in sorted(os.listdir(ex_dir)):
-        if fname.startswith("run_") and fname.endswith(".zip"):
-            pos = load_run_positions(os.path.join(ex_dir, fname))
-            if pos is None:
-                continue
-            s = collision_stats_for_run(pos)
-            nnd_vals.append(s["nnd_mean"])
-            coll_vals.append(s["collision_rate"])
-
-    return {
-        "nnd_mean":            float(np.nanmean(nnd_vals)) if nnd_vals else np.nan,
-        "collision_rate_mean": float(np.nanmean(coll_vals)) if coll_vals else np.nan,
-        "nnd_vals":            nnd_vals,
-        "coll_vals":           coll_vals,
-        "n_runs":              len(nnd_vals),
-    }
+def add_chance_corrected(stats: dict, phi0: float):
+    """Phi* = (Phi - Phi_0) / (1 - Phi_0), per run and per experiment."""
+    for s in stats.values():
+        runs = s["runs"]
+        for src in ("pol_body", "pol_vel"):
+            if src in runs:
+                runs[f"{src}_star"] = (runs[src] - phi0) / (1 - phi0)
+                s["mean"][f"{src}_star"] = float(runs[f"{src}_star"].mean())
+                s["std"][f"{src}_star"] = float(runs[f"{src}_star"].std(ddof=0))
 
 
-def load_all_collision_stats() -> dict[str, dict]:
-    """Calcola le statistiche di collisione per tutti gli esperimenti."""
-    print("Calcolo statistiche di collisione/affollamento (dalle posizioni)...")
+def matrix(stats: dict, key: str) -> np.ndarray:
+    m = np.full((len(EW_VALUES), len(RW_VALUES)), np.nan)
+    for ex_name, (_, ew, rw) in EXPERIMENTS.items():
+        m[EW_VALUES.index(ew), RW_VALUES.index(rw)] = stats[ex_name]["mean"].get(key, np.nan)
+    return m
+
+
+def per_cell(stats: dict, key: str) -> dict[tuple, list]:
+    """Per-run values of `key` for every (EW, RW) cell (for the boxplots)."""
     out = {}
-    for ex_name in EXPERIMENTS:
-        out[ex_name] = compute_experiment_collision_stats(ex_name)
-        print(f"  {ex_name}: {out[ex_name]['n_runs']} run con posizioni valide")
+    for ew in EW_VALUES:
+        for rw in RW_VALUES:
+            runs = stats[find_experiment(ew, rw)]["runs"]
+            out[(ew, rw)] = runs[key].dropna().tolist() if key in runs else []
     return out
 
 
-def build_collision_matrices(collision_stats: dict[str, dict]) -> dict[str, np.ndarray]:
-    """Matrici 5×5 (EW × RW) di NND media e tasso di collisione medio."""
-    n_ew, n_rw = len(EW_VALUES), len(RW_VALUES)
-    nnd_mean = np.full((n_ew, n_rw), np.nan)
-    coll_mean = np.full((n_ew, n_rw), np.nan)
-
-    for ex_name, (a, ew, rw) in EXPERIMENTS.items():
-        i = EW_VALUES.index(ew)
-        j = RW_VALUES.index(rw)
-        s = collision_stats.get(ex_name, {})
-        nnd_mean[i, j] = s.get("nnd_mean", np.nan)
-        coll_mean[i, j] = s.get("collision_rate_mean", np.nan)
-
-    return {"nnd_mean": nnd_mean, "collision_rate_mean": coll_mean}
-
-
-def plot_collision_heatmaps(matrices: dict[str, np.ndarray]):
-    """
-    Due heatmap affiancate (NND media, tasso di collisione medio),
-    indicizzate da EW (righe) × RW (colonne), ad align_weight fisso.
-    """
-    metric_cols = [
-        ("nnd_mean", "NND media (distanza dal vicino più vicino)", "viridis"),
-        ("collision_rate_mean", "Tasso di collisione\n(frazione tempo con dist. < diametro agente)", "Reds"),
-    ]
-
-    fig, axes = plt.subplots(1, len(metric_cols), figsize=(6.8 * len(metric_cols), 5.5))
-    fig.suptitle(f"Collisioni/affollamento al variare di edge_weight (EW) e repulsion_weight (RW)\n"
-                 f"align_weight fisso = {ALIGN_WEIGHT_FIXED}, soglia collisione = {AGENT_DIAMETER} m",
-                 fontsize=14, fontweight="bold")
-
-    for col, (key, title, cmap) in enumerate(metric_cols):
-        ax = axes[col]
-        mat = matrices[key]
-        im = ax.imshow(mat, cmap=cmap, aspect="auto",
-                        vmin=np.nanmin(mat) if np.any(~np.isnan(mat)) else 0,
-                        vmax=np.nanmax(mat) if np.any(~np.isnan(mat)) else 1)
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title(title, fontsize=11, fontweight="bold")
-        ax.set_xlabel("Repulsion Weight (RW)", fontsize=10)
-        ax.set_ylabel("Edge Weight (EW)", fontsize=10)
-        ax.set_xticks(range(len(RW_VALUES)))
-        ax.set_yticks(range(len(EW_VALUES)))
-        ax.set_xticklabels(RW_VALUES)
-        ax.set_yticklabels(EW_VALUES)
-
-        vmax = np.nanmax(mat) if np.any(~np.isnan(mat)) else 1
-        vmin = np.nanmin(mat) if np.any(~np.isnan(mat)) else 0
-        for i in range(mat.shape[0]):
-            for j in range(mat.shape[1]):
-                val = mat[i, j]
-                if not np.isnan(val):
-                    fmt = f"{val:.3f}" if key == "nnd_mean" else f"{val:.1%}"
-                    ax.text(j, i, fmt, ha="center", va="center",
-                            fontsize=9, color="black" if val < vmin + 0.7 * (vmax - vmin) else "white")
-
-    plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, "heatmap_collisioni.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Salvata: {path}")
-
-
-def plot_collision_boxplots(collision_stats: dict[str, dict]):
-    """
-    Due boxplot (NND e tasso di collisione) con un box per esperimento,
-    ordinati per numero di esperimento (quindi raggruppati per EW, poi RW).
-    """
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 10))
-    fig.suptitle(f"Distribuzione delle metriche di collisione per esperimento "
-                 f"(align_weight={ALIGN_WEIGHT_FIXED}, soglia={AGENT_DIAMETER} m)",
-                 fontsize=13, fontweight="bold")
-
-    labels = []
-    nnd_data = []
-    coll_data = []
-    ew_boundaries = []
-
-    ordered_names = sorted(EXPERIMENTS.keys(), key=lambda n: int(n.split("_")[1]))
-    prev_ew = None
-    for idx, ex_name in enumerate(ordered_names):
-        align, ew, rw = EXPERIMENTS[ex_name]
-        if prev_ew is not None and ew != prev_ew:
-            ew_boundaries.append(idx - 0.5)
-        prev_ew = ew
-
-        s = collision_stats.get(ex_name, {})
-        nnd_vals = s.get("nnd_vals") or [np.nan]
-        coll_vals = s.get("coll_vals") or [np.nan]
-        labels.append(f"{ex_name}\nEW={ew} RW={rw}")
-        nnd_data.append(nnd_vals)
-        coll_data.append(coll_vals)
-
-    x = range(len(labels))
-
-    bp1 = ax1.boxplot(nnd_data, positions=list(x), widths=0.6,
-                       patch_artist=True, showfliers=True)
-    for patch in bp1["boxes"]:
-        patch.set_facecolor("#D7BDE2")
-        patch.set_alpha(0.8)
-    ax1.set_xticks(list(x))
-    ax1.set_xticklabels(labels, fontsize=6.5, rotation=30, ha="right")
-    ax1.set_ylabel("NND media (m)", fontsize=10)
-    ax1.axhline(AGENT_DIAMETER, color="red", linewidth=0.8, linestyle="--",
-                alpha=0.6, label=f"diametro agente ({AGENT_DIAMETER} m)")
-    for b in ew_boundaries:
-        ax1.axvline(b, color="gray", linewidth=1.0, linestyle=":", alpha=0.7)
-    ax1.legend(fontsize=8)
-    ax1.grid(axis="y", alpha=0.3)
-
-    bp2 = ax2.boxplot(coll_data, positions=list(x), widths=0.6,
-                       patch_artist=True, showfliers=True)
-    for patch in bp2["boxes"]:
-        patch.set_facecolor("#F5B7B1")
-        patch.set_alpha(0.8)
-    ax2.set_xticks(list(x))
-    ax2.set_xticklabels(labels, fontsize=6.5, rotation=30, ha="right")
-    ax2.set_ylabel("Tasso di collisione", fontsize=10)
-    ax2.set_ylim(0, max(1.0, np.nanmax([v for vs in coll_data for v in vs] or [0]) * 1.1))
-    for b in ew_boundaries:
-        ax2.axvline(b, color="gray", linewidth=1.0, linestyle=":", alpha=0.7)
-    ax2.grid(axis="y", alpha=0.3)
-
-    plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, "boxplot_collisioni.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Salvata: {path}")
-
-
 # ─────────────────────────────────────────────────────────────────────────────
-# CALCOLO METRICHE AGGREGATE
+# FIGURES
 # ─────────────────────────────────────────────────────────────────────────────
 
-def stationary_mean(df: pd.DataFrame, col: str, fraction: float = STATIONARY_FRACTION) -> float:
-    """Media di una colonna nella fase stazionaria (ultima `fraction` della simulazione)."""
-    n = len(df)
-    start = int(n * (1 - fraction))
-    return df[col].iloc[start:].mean()
+def _path(name: str) -> str:
+    return os.path.join(OUTPUT_DIR, name)
 
 
-def compute_experiment_stats(runs: list[pd.DataFrame]) -> dict:
+def plot_heatmaps(stats: dict):
+    """Phi (top) and C (bottom), each with its chance-corrected scale on the colour bar."""
+    fig, axes = plt.subplots(2, 1, figsize=(0.8 * FIG_WIDTH, 5.6))
+    for ax, key, style, xlabel in ((axes[0], "pol_body", "polarization", None),
+                                   (axes[1], "cohesion", "cohesion", "Repulsion weight $RW$")):
+        mat = matrix(stats, key)
+        im = annotated_heatmap(ax, mat, style, RW_VALUES, EW_VALUES, xlabel=xlabel, aspect="auto")
+        style_colorbar(fig, im, ax, style, mat)
+    fig.tight_layout()
+    save(fig, _path("heatmap_stationary_metrics.png"))
+
+
+def plot_heatmap_rows(rows: list[tuple], name: str, ncols: int = 3):
     """
-    Per ogni esperimento calcola:
-        - media della polarizzazione stazionaria su tutte le run
-        - media della coesione stazionaria su tutte le run
-        - serie temporale media e std (serve ai grafici di evoluzione
-          temporale, che mostrano una banda ± std: è una cosa diversa
-          dalle heatmap di deviazione standard, rimosse)
+    Grid of heatmaps, one row per family of metrics with a single colour bar
+    per row (metrics in a row share the scale). Each row is an independent
+    sub-figure, so all panels have the same width.
+    rows = [(style_key, colour_bar_label, [(key, title), ...], fmt), ...]
     """
-    if not runs:
-        return {
-            "polarization_mean": np.nan,
-            "cohesion_mean":     np.nan,
-            "timeseries":        None,
-            "n_runs":            0,
-        }
-
-    # valori stazionari per run
-    pol_vals = [stationary_mean(r, "polarization") for r in runs]
-    coh_vals = [stationary_mean(r, "cohesion")     for r in runs]
-
-    # serie temporale: allinea tutte le run sullo stesso asse tick
-    # usa il tick set più comune come riferimento
-    tick_sets = [set(r["tick"].values) for r in runs]
-    common_ticks = sorted(tick_sets[0].intersection(*tick_sets[1:]))
-
-    if common_ticks:
-        pol_ts = np.array([r.set_index("tick").loc[common_ticks, "polarization"].values for r in runs])
-        coh_ts = np.array([r.set_index("tick").loc[common_ticks, "cohesion"].values     for r in runs])
-        timeseries = {
-            "ticks":              np.array(common_ticks),
-            "polarization_mean":  pol_ts.mean(axis=0),
-            "polarization_std":   pol_ts.std(axis=0),
-            "cohesion_mean":      coh_ts.mean(axis=0),
-            "cohesion_std":       coh_ts.std(axis=0),
-        }
-    else:
-        timeseries = None
-
-    return {
-        "polarization_mean": np.nanmean(pol_vals),
-        "cohesion_mean":     np.nanmean(coh_vals),
-        "timeseries":        timeseries,
-        "n_runs":            len(runs),
-    }
-
-
-def build_heatmap_matrices(stats: dict[str, dict]) -> dict[str, np.ndarray]:
-    """
-    Costruisce le matrici 5×5 (EW × RW) delle metriche medie stazionarie,
-    ad align_weight fisso.
-
-    Ritorna: {"pol_mean": ..., "coh_mean": ...}
-    """
-    n_ew, n_rw = len(EW_VALUES), len(RW_VALUES)
-    pol_mean = np.full((n_ew, n_rw), np.nan)
-    coh_mean = np.full((n_ew, n_rw), np.nan)
-
-    for ex_name, (a, ew, rw) in EXPERIMENTS.items():
-        i = EW_VALUES.index(ew)
-        j = RW_VALUES.index(rw)
-        s = stats.get(ex_name, {})
-        pol_mean[i, j] = s.get("polarization_mean", np.nan)
-        coh_mean[i, j] = s.get("cohesion_mean",     np.nan)
-
-    return {"pol_mean": pol_mean, "coh_mean": coh_mean}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURA 1: HEATMAP (solo medie, niente deviazione standard)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def plot_heatmaps(matrices: dict[str, np.ndarray]):
-    """
-    Due heatmap affiancate (polarizzazione media, coesione media),
-    indicizzate da EW (righe) × RW (colonne), ad align_weight fisso.
-    I pannelli di deviazione standard sono stati rimossi.
-    """
-    metric_cols = [
-        ("pol_mean", "Polarizzazione media", "YlOrRd"),
-        ("coh_mean", "Coesione media",       "YlGnBu_r"),
-    ]
-
-    fig, axes = plt.subplots(1, len(metric_cols), figsize=(6.5 * len(metric_cols), 5.5))
-    fig.suptitle(f"Metriche stazionarie al variare di edge_weight (EW) e repulsion_weight (RW)\n"
-                 f"align_weight fisso = {ALIGN_WEIGHT_FIXED}",
-                 fontsize=14, fontweight="bold")
-
-    for col, (key, title, cmap) in enumerate(metric_cols):
-        ax = axes[col]
-        mat = matrices[key]
-        im = ax.imshow(mat, cmap=cmap, aspect="auto",
-                        vmin=np.nanmin(mat) if np.any(~np.isnan(mat)) else 0,
-                        vmax=np.nanmax(mat) if np.any(~np.isnan(mat)) else 1)
-        plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-        ax.set_title(title, fontsize=12, fontweight="bold")
-        ax.set_xlabel("Repulsion Weight (RW)", fontsize=10)
-        ax.set_ylabel("Edge Weight (EW)", fontsize=10)
-        ax.set_xticks(range(len(RW_VALUES)))
-        ax.set_yticks(range(len(EW_VALUES)))
-        ax.set_xticklabels(RW_VALUES)
-        ax.set_yticklabels(EW_VALUES)
-
-        vmax = np.nanmax(mat) if np.any(~np.isnan(mat)) else 1
-        for i in range(mat.shape[0]):
-            for j in range(mat.shape[1]):
-                val = mat[i, j]
-                if not np.isnan(val):
-                    ax.text(j, i, f"{val:.3f}", ha="center", va="center",
-                            fontsize=9, color="black" if val < vmax * 0.7 else "white")
-
-    plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, "heatmap_metriche.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Salvata: {path}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURA 2: EVOLUZIONE TEMPORALE (griglia EW × RW, ad align_weight fisso)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def plot_temporal_evolution(stats: dict[str, dict], metric: str = "polarization"):
-    """
-    Griglia 5×5 di subplot (righe = EW, colonne = RW). Ogni subplot mostra
-    la media ± std della metrica nel tempo su tutte le run, ad align_weight
-    fisso.
-    """
-    metric_label = {
-        "polarization": "Polarizzazione",
-        "cohesion":     "Coesione",
-    }.get(metric, metric)
-
-    fig, axes = plt.subplots(len(EW_VALUES), len(RW_VALUES),
-                              figsize=(3.6 * len(RW_VALUES), 2.8 * len(EW_VALUES)),
-                              sharex=False, sharey=True)
-    fig.suptitle(f"Evoluzione temporale — {metric_label} "
-                 f"(align_weight={ALIGN_WEIGHT_FIXED}, media ± std su N run)",
-                 fontsize=13, fontweight="bold")
-
-    for i, ew in enumerate(EW_VALUES):
-        for j, rw in enumerate(RW_VALUES):
-            ax = axes[i, j]
-            ex_name = find_experiment(ew, rw)
-            s = stats.get(ex_name, {}) if ex_name else {}
-            ts = s.get("timeseries")
-            n = s.get("n_runs", 0)
-
-            ax.set_title(f"EW={ew} RW={rw}\n(n={n})", fontsize=7)
-            ax.set_xlabel("tick", fontsize=6)
-            ax.tick_params(labelsize=6)
-
-            if ts is None:
-                ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                        transform=ax.transAxes, fontsize=8, color="gray")
+    fig = plt.figure(figsize=(FIG_WIDTH, 2.5 * len(rows)), layout="constrained")
+    subfigs = np.atleast_1d(fig.subfigures(len(rows), 1))
+    for sub, (style, cb_label, panels, fmt) in zip(subfigs, rows):
+        axes = np.atleast_1d(sub.subplots(1, ncols))
+        im, mats = None, []
+        for c, ax in enumerate(axes):
+            if c >= len(panels):
+                ax.set_axis_off()
                 continue
-
-            ticks = ts["ticks"]
-            mean  = ts[f"{metric}_mean"]
-            std   = ts[f"{metric}_std"]
-
-            ax.plot(ticks, mean, color="#1f77b4", linewidth=1.0, label="media")
-            ax.fill_between(ticks, mean - std, mean + std,
-                             alpha=0.25, color="#1f77b4", label="±std")
-            ax.set_ylim(0, 1.05)
-
-            # linea verticale che separa transitorio da stazionario
-            cutoff = ticks[int(len(ticks) * (1 - STATIONARY_FRACTION))]
-            ax.axvline(cutoff, color="red", linewidth=0.7, linestyle="--", alpha=0.6)
-
-    for i, ew in enumerate(EW_VALUES):
-        axes[i, 0].set_ylabel(f"EW={ew}\n{metric_label}", fontsize=7)
-
-    plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, f"evoluzione_temporale_{metric}.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Salvata: {path}")
+            key, title = panels[c]
+            mat = matrix(_STATS, key)
+            mats.append(mat)
+            im = annotated_heatmap(ax, mat, style, RW_VALUES, EW_VALUES,
+                                   xlabel="$RW$", ylabel="$EW$" if c == 0 else None,
+                                   title=title, aspect="auto", fmt=fmt)
+        style_colorbar(sub, im, list(axes[:len(panels)]), style, mats,
+                       label=cb_label, fraction=0.05, pad=0.03)
+    save(fig, _path(name))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURA 3: BOXPLOT PER ESPERIMENTO
-# ─────────────────────────────────────────────────────────────────────────────
-
-def plot_boxplots(data: dict[str, list[pd.DataFrame]]):
-    """
-    Due boxplot (polarizzazione e coesione) con un box per esperimento,
-    ordinati per numero di esperimento (quindi raggruppati per EW, poi RW).
-    I valori sono quelli stazionari per ogni run, ad align_weight fisso.
-    """
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(20, 10))
-    fig.suptitle(f"Distribuzione delle metriche stazionarie per esperimento "
-                 f"(align_weight={ALIGN_WEIGHT_FIXED})",
-                 fontsize=13, fontweight="bold")
-
-    labels = []
-    pol_data = []
-    coh_data = []
-    ew_boundaries = []  # indici in cui cambia EW, per le linee verticali
-
-    ordered_names = sorted(EXPERIMENTS.keys(), key=lambda n: int(n.split("_")[1]))
-    prev_ew = None
-    for idx, ex_name in enumerate(ordered_names):
-        align, ew, rw = EXPERIMENTS[ex_name]
-        if prev_ew is not None and ew != prev_ew:
-            ew_boundaries.append(idx - 0.5)
-        prev_ew = ew
-
-        runs = data.get(ex_name, [])
-        pol_vals = [stationary_mean(r, "polarization") for r in runs if len(r) > 0]
-        coh_vals = [stationary_mean(r, "cohesion")     for r in runs if len(r) > 0]
-        labels.append(f"{ex_name}\nEW={ew} RW={rw}")
-        pol_data.append(pol_vals if pol_vals else [np.nan])
-        coh_data.append(coh_vals if coh_vals else [np.nan])
-
-    x = range(len(labels))
-
-    bp1 = ax1.boxplot(pol_data, positions=list(x), widths=0.6,
-                       patch_artist=True, showfliers=True)
-    for patch in bp1["boxes"]:
-        patch.set_facecolor("#AED6F1")
-        patch.set_alpha(0.8)
-    ax1.set_xticks(list(x))
-    ax1.set_xticklabels(labels, fontsize=6.5, rotation=30, ha="right")
-    ax1.set_ylabel("Polarizzazione", fontsize=10)
-    ax1.set_ylim(0, 1.05)
-    ax1.axhline(0.5, color="red", linewidth=0.8, linestyle="--", alpha=0.5, label="soglia 0.5")
-    for b in ew_boundaries:
-        ax1.axvline(b, color="gray", linewidth=1.0, linestyle=":", alpha=0.7)
-    ax1.legend(fontsize=8)
-    ax1.grid(axis="y", alpha=0.3)
-
-    bp2 = ax2.boxplot(coh_data, positions=list(x), widths=0.6,
-                       patch_artist=True, showfliers=True)
-    for patch in bp2["boxes"]:
-        patch.set_facecolor("#A9DFBF")
-        patch.set_alpha(0.8)
-    ax2.set_xticks(list(x))
-    ax2.set_xticklabels(labels, fontsize=6.5, rotation=30, ha="right")
-    ax2.set_ylabel("Coesione (dist. media dal centroide)", fontsize=10)
-    for b in ew_boundaries:
-        ax2.axvline(b, color="gray", linewidth=1.0, linestyle=":", alpha=0.7)
-    ax2.grid(axis="y", alpha=0.3)
-
-    plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, "boxplot_metriche.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Salvata: {path}")
+def plot_structure():
+    """Main text, 1 x 3: largest cluster, milling around the arena centre, Phi > 0.8."""
+    plot_heatmap_rows([
+        ("fraction", "Fraction", [
+            ("largest_cluster", "Largest-cluster\nfraction"),
+            ("milling_arena", "Milling around\narena centre"),
+            ("pol_body_ordered", f"Fraction of time\nwith $\\Phi > {ORDER_THRESHOLD:g}$"),
+        ], "{:.2f}"),
+    ], "heatmap_structure.png")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FIGURA 4: EVOLUZIONE TEMPORALE — CONFRONTO RW A EW FISSA
-# ─────────────────────────────────────────────────────────────────────────────
+def plot_appendix_structure():
+    plot_heatmap_rows([
+        ("polarization", r"Velocity polarisation $\Phi_v$", [
+            ("pol_vel", r"$\Phi_v$"),
+            ("pol_vel_far_wall", "$\\Phi_v$ away\nfrom wall"),
+        ], "{:.2f}"),
+        ("distance_bl", "Distance (BL)", [
+            ("d_centroid_bl", "Mean distance\nfrom centroid"),
+            ("rg_bl", "Radius of\ngyration"),
+            ("d_pair_bl", "Mean pairwise\ndistance"),
+        ], None),
+        ("fraction", "Milling / fraction of time", [
+            ("milling_group", "Milling around\ngroup centroid"),
+            ("near_wall", f"Time within\n{WALL_MARGIN_BL:g} BL of wall"),
+        ], "{:.2f}"),
+    ], "appendix_structure.png")
 
-def plot_rw_comparison(stats: dict[str, dict], metric: str = "polarization"):
-    """
-    Una figura con un subplot per valore di EW; ogni subplot mostra le
-    curve (una per RW) della metrica nel tempo, ad align_weight fisso.
-    """
-    metric_label = {
-        "polarization": "Polarizzazione",
-        "cohesion":     "Coesione",
-    }.get(metric, metric)
 
-    colors = plt.cm.viridis(np.linspace(0, 1, len(RW_VALUES)))
+def plot_collision_heatmaps(stats: dict):
+    fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH, 3.2))
+    for ax, key, style in ((axes[0], "nnd_m", "nnd"), (axes[1], "collision_rate", "collision_rate")):
+        mat = matrix(stats, key)
+        im = annotated_heatmap(ax, mat, style, RW_VALUES, EW_VALUES)
+        style_colorbar(fig, im, ax, style, mat)
+    fig.tight_layout()
+    save(fig, _path("heatmap_collisions.png"))
 
-    fig, axes = plt.subplots(1, len(EW_VALUES), figsize=(4.2 * len(EW_VALUES), 4.5), sharey=True)
-    fig.suptitle(f"Effetto di RW su {metric_label} al variare di EW "
-                 f"(align_weight={ALIGN_WEIGHT_FIXED})",
-                 fontsize=13, fontweight="bold")
 
-    for idx, ew in enumerate(EW_VALUES):
-        ax = axes[idx]
-        ax.set_title(f"EW = {ew}", fontsize=11, fontweight="bold")
-        ax.set_xlabel("tick", fontsize=9)
-        if idx == 0:
-            ax.set_ylabel(metric_label, fontsize=9)
-        ax.set_ylim(0, 1.05)
-        ax.grid(alpha=0.3)
+def plot_temporal_combined(stats: dict):
+    plot_temporal_grid(lambda ew, rw: stats[find_experiment(ew, rw)]["timeseries"],
+                       EW_VALUES, RW_VALUES, "$EW$", "$RW$", _path("temporal_combined.png"))
 
-        for cidx, rw in enumerate(RW_VALUES):
-            ex_name = find_experiment(ew, rw)
-            if ex_name is None:
-                continue
-            s  = stats.get(ex_name, {})
-            ts = s.get("timeseries")
-            n  = s.get("n_runs", 0)
-            if ts is None:
-                continue
-            ticks = ts["ticks"]
-            mean  = ts[f"{metric}_mean"]
-            ax.plot(ticks, mean, color=colors[cidx], linewidth=1.5,
-                    label=f"RW={rw} (n={n})")
 
-        ax.legend(fontsize=7)
+DIST_BINS = np.linspace(0.0, 1.0, 51)
 
-    plt.tight_layout()
-    path = os.path.join(OUTPUT_DIR, f"confronto_rw_{metric}.png")
-    plt.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"  Salvata: {path}")
+
+def _plot_distributions(ax, stats: dict, ew: float):
+    colours = series_colours(len(RW_VALUES))
+    centres = 0.5 * (DIST_BINS[1:] + DIST_BINS[:-1])
+    for k, rw in enumerate(RW_VALUES):
+        vals = stats[find_experiment(ew, rw)]["stationary_values"].get("pol_body", np.array([]))
+        vals = vals[np.isfinite(vals)]
+        if not vals.size:
+            continue
+        dens, _ = np.histogram(vals, bins=DIST_BINS, density=True)
+        ax.plot(centres, dens, color=colours[k], linewidth=1.3, label=f"{rw:g}")
+    ax.axvline(PHI_CHANCE, color="0.35", linewidth=0.8, linestyle=":")
+    ax.axvline(ORDER_THRESHOLD, color="0.35", linewidth=0.8, linestyle="--")
+    ax.set_xlim(0, 1)
+    ax.grid(alpha=0.25)
+
+
+def plot_distributions(stats: dict):
+    # main text: one value of EW
+    fig, ax = plt.subplots(figsize=(0.6 * FIG_WIDTH, 2.8))
+    _plot_distributions(ax, stats, DIST_EW_MAIN)
+    ax.set_xlabel(METRIC_STYLE["polarization"]["label"])
+    ax.set_ylabel("Probability density")
+    ax.set_title(f"$EW$ = {DIST_EW_MAIN:g}")
+    ax.legend(title="$RW$", frameon=False)
+    fig.tight_layout()
+    save(fig, _path("distribution_polarisation.png"))
+
+    # appendix: every EW, 1 x 5
+    fig, axes = plt.subplots(1, len(EW_VALUES), figsize=(FIG_WIDTH, 2.3), sharey=True)
+    for c, ew in enumerate(EW_VALUES):
+        _plot_distributions(axes[c], stats, ew)
+        axes[c].set_title(f"$EW$ = {ew:g}")
+        axes[c].set_xticks([0, 0.4, 0.8])
+    axes[0].set_ylabel("Probability density")
+    axes[len(EW_VALUES) // 2].set_xlabel(METRIC_STYLE["polarization"]["label"])
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.tight_layout()
+    fig.legend(handles, labels, title="$RW$", loc="center left",
+               bbox_to_anchor=(1.0, 0.5), frameon=False)
+    save(fig, _path("appendix_distributions.png"))
+
+
+def plot_boxplots(stats: dict):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(FIG_WIDTH, 5.2))
+    lo, hi = grouped_boxplot(ax1, per_cell(stats, "pol_body"), EW_VALUES, RW_VALUES,
+                             "polarization", METRIC_STYLE["polarization"]["label"], "$EW$")
+    ax1.axhline(PHI_CHANCE, color="0.35", linewidth=0.8, linestyle="--")
+    ax1.set_ylim(lo - 0.04 * (hi - lo), hi)
+    lo, hi = grouped_boxplot(ax2, per_cell(stats, "cohesion"), EW_VALUES, RW_VALUES,
+                             "cohesion", METRIC_STYLE["cohesion"]["label"], "$EW$")
+    ax2.set_ylim(lo, hi)
+    fig.tight_layout()
+    series_legend(fig, RW_VALUES, "$RW$")
+    save(fig, _path("boxplot_metrics.png"))
+
+
+def plot_collision_boxplots(stats: dict):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(FIG_WIDTH, 5.2))
+    lo, hi = grouped_boxplot(ax1, per_cell(stats, "nnd_m"), EW_VALUES, RW_VALUES,
+                             "nnd", METRIC_STYLE["nnd"]["label"], "$EW$")
+    ax1.axhline(AGENT_DIAMETER, color="#c0392b", linewidth=0.9, linestyle="--",
+                label=f"Body diameter ({AGENT_DIAMETER} m)")
+    ax1.set_ylim(lo, hi)
+    ax1.legend(loc="upper left", frameon=False)
+    lo, hi = grouped_boxplot(ax2, per_cell(stats, "collision_rate"), EW_VALUES, RW_VALUES,
+                             "collision_rate", METRIC_STYLE["collision_rate"]["label"], "$EW$")
+    ax2.set_ylim(lo, hi)
+    fig.tight_layout()
+    series_legend(fig, RW_VALUES, "$RW$")
+    save(fig, _path("boxplot_collisions.png"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
+SUMMARY_KEYS = [
+    "pol_body", "pol_body_star", "pol_body_ordered",
+    "pol_vel", "pol_vel_star", "pol_vel_ordered", "pol_vel_far_wall",
+    "milling_group", "milling_arena",
+    "cohesion", "cohesion_star", "d_centroid_bl", "rg_bl", "d_pair_bl",
+    "largest_cluster", "near_wall", "nnd_m", "collision_rate",
+]
+
+_STATS: dict = {}   # filled in main(), read by plot_heatmap_rows
+
+
+def detect_n_agents() -> int:
+    for ex in ordered_experiments():
+        for zip_path in list_runs(ex):
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    n = len([n for n in zf.namelist() if n.endswith(".pkl") and "_spins" not in n])
+                if n > 1:
+                    return n
+            except Exception:
+                continue
+    return N_AGENTS_DEFAULT
+
+
 def main():
-    print("=" * 60)
-    print("  Analisi Allocentric Flocking")
-    print(f"  (align_weight fisso = {ALIGN_WEIGHT_FIXED}, griglia EW x RW 5x5)")
-    print("=" * 60)
+    print("=" * 70)
+    print(f"  Allocentric flocking analysis (AW = {ALIGN_WEIGHT_FIXED}, EW x RW 5x5 grid)")
+    print("=" * 70)
 
-    # 1. Carica dati
-    data = load_all_experiments()
+    n_agents = detect_n_agents()
+    phi0 = random_polarization(n_agents)
+    d_random = random_centroid_distance(n_agents, ARENA_RADIUS)
+    d_random_inner = random_centroid_distance(n_agents, ARENA_RADIUS - WALL_MARGIN_BL * BL)
+    print(f"\nRandom baselines for N = {n_agents}:")
+    print(f"  chance polarization Phi_0           = {phi0:.3f}")
+    print(f"  random mean distance from centroid  = {d_random:.3f} m "
+          f"(C = {1 - d_random / ARENA_DIAMETER:.3f})")
+    print(f"  same, excluding {WALL_MARGIN_BL:g} BL wall band = {d_random_inner:.3f} m "
+          f"(C = {1 - d_random_inner / ARENA_DIAMETER:.3f})")
+    # the colour bars use the reference values in the STYLE section: check they match
+    if abs(phi0 - PHI_CHANCE) > 0.005 or abs(d_random - D_RAND) > 0.005:
+        print(f"  [WARN] baselines differ from the STYLE section (PHI_CHANCE={PHI_CHANCE}, "
+              f"D_RAND={D_RAND}): update them there so that Phi* and C* on the colour "
+              f"bars match the values in the tables")
 
-    # 2. Calcola statistiche per esperimento
-    print("\nCalcolo statistiche...")
-    stats = {ex: compute_experiment_stats(runs) for ex, runs in data.items()}
+    print("\nLoading and processing runs...")
+    stats = {}
+    for ex in ordered_experiments():
+        stats[ex] = process_experiment(ex, d_random)
+        print(f"  {ex}: {stats[ex]['n_runs']} runs")
+    add_chance_corrected(stats, phi0)
+    _STATS.update(stats)
 
-    # Stampa riepilogo
-    print("\nRiepilogo metriche stazionarie:")
-    print(f"{'Exp':<8} {'EW':>5} {'RW':>5} {'Pol_mean':>10} {'Coh_mean':>10} {'N_runs':>7}")
-    print("-" * 52)
-    for ex in sorted(stats.keys(), key=lambda n: int(n.split("_")[1])):
-        align, ew, rw = EXPERIMENTS[ex]
-        s = stats[ex]
-        print(f"{ex:<8} {ew:>5.2f} {rw:>5.2f} "
-              f"{s['polarization_mean']:>10.4f} "
-              f"{s['cohesion_mean']:>10.4f} "
-              f"{s.get('n_runs', 0):>7d}")
+    # ── summary table (console + CSV) ─────────────────────────────────────
+    rows = []
+    for ex in ordered_experiments():
+        _, ew, rw = EXPERIMENTS[ex]
+        row = {"experiment": ex, "EW": ew, "RW": rw, "n_runs": stats[ex]["n_runs"]}
+        for k in SUMMARY_KEYS:
+            row[f"{k}_mean"] = stats[ex]["mean"].get(k, np.nan)
+            row[f"{k}_std"] = stats[ex]["std"].get(k, np.nan)
+        rows.append(row)
+    summary = pd.DataFrame(rows)
+    summary_path = os.path.join(OUTPUT_DIR, "summary_metrics.csv")
+    summary.to_csv(summary_path, index=False, float_format="%.5f")
+    with open(os.path.join(OUTPUT_DIR, "random_baselines.txt"), "w") as fh:
+        fh.write(f"N = {n_agents}\nPhi_0 = {phi0:.5f}\n"
+                 f"d_random = {d_random:.5f} m (C_random = {1 - d_random / ARENA_DIAMETER:.5f})\n"
+                 f"d_random_excluding_wall_band = {d_random_inner:.5f} m "
+                 f"(C = {1 - d_random_inner / ARENA_DIAMETER:.5f})\n")
 
-    # 3. Costruisce matrici per heatmap
-    print("\nGenerazione figure...")
-    matrices = build_heatmap_matrices(stats)
+    cols = ["pol_body", "pol_vel", "pol_vel_ordered", "milling_arena",
+            "cohesion", "cohesion_star", "rg_bl", "largest_cluster", "collision_rate"]
+    print("\nStationary means:")
+    print(f"{'Exp':<6}{'EW':>5}{'RW':>6}" + "".join(f"{c[:11]:>12}" for c in cols) + f"{'runs':>6}")
+    for r in rows:
+        print(f"{r['experiment']:<6}{r['EW']:>5.2f}{r['RW']:>6.2f}"
+              + "".join(f"{r.get(c + '_mean', np.nan):>12.3f}" for c in cols)
+              + f"{r['n_runs']:>6d}")
+    print(f"\n  Saved: {summary_path}")
 
-    # 4. Figure
-    print("  [1/4] Heatmap metriche stazionarie (solo medie, EW x RW)")
-    plot_heatmaps(matrices)
+    ts0 = next((s["timeseries"] for s in stats.values() if s["timeseries"] is not None), None)
+    if ts0 is not None:
+        print(f"\nMoving average: {ts0['window_samples']} samples (~{SMOOTHING_WINDOW_S:.0f} s); "
+              f"stationary window starts at {ts0['cutoff_s']:.0f} s")
 
-    print("  [2/4] Evoluzione temporale — polarizzazione")
-    plot_temporal_evolution(stats, metric="polarization")
+    # ── figures ────────────────────────────────────────────────────────────
+    print("\nGenerating figures...")
+    plot_heatmaps(stats)
+    plot_temporal_combined(stats)
+    plot_distributions(stats)
+    plot_boxplots(stats)
+    if COMPUTE_POSITION_METRICS:
+        plot_structure()
+        plot_collision_heatmaps(stats)
+        plot_collision_boxplots(stats)
+        plot_appendix_structure()
 
-    print("  [3/4] Evoluzione temporale — coesione")
-    plot_temporal_evolution(stats, metric="cohesion")
-
-    print("  [4/4] Boxplot distribuzione per esperimento (tutti e 25)")
-    plot_boxplots(data)
-
-    print("  [extra] Confronto RW — polarizzazione")
-    plot_rw_comparison(stats, metric="polarization")
-
-    print("  [extra] Confronto RW — coesione")
-    plot_rw_comparison(stats, metric="cohesion")
-
-    # 5. Collisioni/affollamento (dalle posizioni grezze)
-    if COMPUTE_COLLISIONS:
-        collision_stats = load_all_collision_stats()
-
-        print("\nRiepilogo metriche di collisione (fase stazionaria):")
-        print(f"{'Exp':<8} {'EW':>5} {'RW':>5} {'NND_mean':>10} {'Coll_rate':>10} {'N_runs':>7}")
-        print("-" * 52)
-        for ex in sorted(collision_stats.keys(), key=lambda n: int(n.split("_")[1])):
-            align, ew, rw = EXPERIMENTS[ex]
-            s = collision_stats[ex]
-            print(f"{ex:<8} {ew:>5.2f} {rw:>5.2f} "
-                  f"{s['nnd_mean']:>10.4f} "
-                  f"{s['collision_rate_mean']:>10.2%} "
-                  f"{s.get('n_runs', 0):>7d}")
-
-        coll_matrices = build_collision_matrices(collision_stats)
-        print("\n  [5/5] Heatmap collisioni (NND e tasso di collisione, EW x RW)")
-        plot_collision_heatmaps(coll_matrices)
-
-        print("  [extra] Boxplot collisioni per esperimento (tutti e 25)")
-        plot_collision_boxplots(collision_stats)
-
-    print(f"\nTutte le figure salvate in: {os.path.abspath(OUTPUT_DIR)}/")
-    print("=" * 60)
+    print(f"\nAll outputs saved in: {os.path.abspath(OUTPUT_DIR)}/")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
